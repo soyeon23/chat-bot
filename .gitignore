@@ -1,0 +1,54 @@
+# 환경변수 (API 키 절대 올리지 않음)
+.env
+.env.*
+
+# Python 캐시
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# 가상환경
+venv/
+.venv/
+env/
+
+# Qdrant 벡터DB (용량 큼, 로컬 전용)
+qdrant_storage/
+
+# 임베딩 모델 캐시
+.cache/
+*.bin
+*.safetensors
+
+# 데이터 파일 (PDF 원본, 청크, 임베딩)
+data/uploads/
+data/raw/
+data/chunks/
+data/metadata/
+data/md/
+data/audit_log.jsonl
+data/ingest_done.txt
+
+# 임시 디버그 파일
+*.txt
+!requirements.txt
+debug_output.txt
+pdf_list.txt
+pdf_sample.txt
+chunk_debug*.txt
+md_preview.txt
+md_search_result.txt
+reingest_*.txt
+pipeline_check.txt
+state_check.txt
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
