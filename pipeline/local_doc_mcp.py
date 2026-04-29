@@ -432,12 +432,100 @@ _ANY_ARTICLE_HEADER_RE = re.compile(
 )
 
 
+# 매뉴얼/가이드 PDF 에서 article 헤더가 본문이 아닌 *목차/요약 표* 로만
+# 잡힐 때 사용할 최소 본문 길이 임계치. 이보다 짧으면 search_text 폴백.
+# 30~50자 짜리 목차 제목 한 줄만 잡히는 케이스를 거른다.
+_ARTICLE_BODY_MIN_CHARS = 100
+
+
+def _article_search_text_fallback(
+    p: Path,
+    article_no: str,
+    cache: _DocCache,
+    *,
+    reason: str,
+) -> dict[str, Any]:
+    """`get_article` 실패/얕은 매칭 시 search_text 로 폴백.
+
+    매뉴얼 PDF (chunker 1.4.0 부터 article_no="p.N" 으로 청킹) 같은 경우,
+    본문 안에 `제10조(연구개발과제 ...)` 형태로만 등장하고 줄 시작 article
+    헤더가 *목차 페이지* 에서만 잡힐 때 본 함수가 호출된다.
+
+    반환 형식은 `get_article` 와 동일한 키셋을 유지해 호출 측 코드를 깨뜨리
+    지 않는다. 추가 디버그 필드 `matched_via="search_text_fallback"` 와
+    `fallback_reason`, `fallback_results` (검색된 페이지 목록) 를 채운다.
+    """
+    # 검색어 정규화 — "제10조" 같은 단순 형태로 본문 매칭. 줄시작 강제 X.
+    norm = re.sub(r"\s+", "", article_no or "")
+    # 조문 형태면 본문에 `제10조(` 형태로 자주 시작하므로 그대로 사용.
+    # 별표/부칙은 정규식 escape 후 사용.
+    if re.match(r"^제\d+조(?:의\d+)?$", norm):
+        query = norm  # "제10조"
+    else:
+        query = article_no or ""
+
+    results = search_text(p.name, query, max_results=5)
+    if not results:
+        return {
+            "doc_name": p.name,
+            "article_no": article_no,
+            "text": "",
+            "start_page": 0,
+            "end_page": 0,
+            "error": (
+                f"조문 헤더 매칭 실패 + search_text 폴백도 0건. "
+                f"이 문서에 '{article_no}' 가 등장하지 않습니다."
+            ),
+            "matched_via": "search_text_fallback",
+            "fallback_reason": reason,
+        }
+
+    # 검색된 페이지들의 본문을 합쳐서 반환. 첫 매칭 페이지를 start_page,
+    # 마지막 매칭 페이지를 end_page 로.
+    pages_seen = sorted({r["page"] for r in results})
+    start_page = pages_seen[0]
+    end_page = pages_seen[-1]
+
+    # 본문 — 매칭된 페이지들의 *발췌* 가 아니라 페이지 본문 그대로 합쳐야
+    # Claude 가 조문 본문을 풀어 쓸 수 있다. 단, 페이지가 너무 많으면 token
+    # 폭주 위험이 있어 최대 3페이지까지로 제한.
+    text_parts: list[str] = []
+    for pg in pages_seen[:3]:
+        if cache.doc_type == "pdf" and 1 <= pg <= len(cache.pages):
+            text_parts.append(f"=== p.{pg} ===\n{cache.pages[pg - 1] or ''}")
+        elif cache.doc_type == "hwp" and cache.pages:
+            text_parts.append(cache.pages[0] or "")
+            break
+
+    body = "\n\n".join(text_parts).strip()
+
+    return {
+        "doc_name": p.name,
+        "article_no": article_no,
+        "text": body,
+        "start_page": start_page,
+        "end_page": end_page,
+        "char_count": len(body),
+        "matched_via": "search_text_fallback",
+        "fallback_reason": reason,
+        "fallback_results": results,
+    }
+
+
 def get_article(doc_name: str, article_no: str) -> dict[str, Any]:
     """`제N조` (또는 `별표 N`) 본문 + 시작/끝 페이지.
 
     chunker 가 split 시 사용하는 같은 `^` + 후행 컨텍스트 규칙을 단일
     article_no 매칭 형태로 재사용한다. 인라인 참조 (`[별표1]을 따름`,
     `법 제32조 ...`) 는 줄 시작이 아니므로 매칭되지 않는다.
+
+    Phase H+1 — 매뉴얼/가이드 PDF (chunker 1.4.0 article_no="p.N") 의 경우
+    줄 시작 헤더가 *목차 페이지* 에만 등장해 30자짜리 제목만 잡히거나
+    아예 매칭 실패하는 일이 잦다. 이런 케이스를 위해 두 단계 폴백:
+        1) 헤더 정규식 매칭이 0건 → search_text 로 본문 등장 페이지 회수
+        2) 매칭은 됐지만 본문이 < `_ARTICLE_BODY_MIN_CHARS` 자
+           → search_text 폴백 (목차에서만 잡힌 사례 회피)
+    폴백 응답은 동일 키셋 + `matched_via="search_text_fallback"` 디버그 플래그.
     """
     print(f"[local_doc_mcp] get_article doc={doc_name!r} article={article_no!r}", file=sys.stderr)
 
@@ -469,23 +557,15 @@ def get_article(doc_name: str, article_no: str) -> dict[str, Any]:
     pat = _article_regex(article_no)
     m = pat.search(full_text)
     if m is None:
-        # 인라인이라도 한번 찾아 — fallback: 사용자가 "제15조" 라고만 쳤는데 우리가
-        # 못 잡으면 조용히 빈 결과 대신 최선의 매칭을 알려준다.
-        loose = re.search(re.escape(re.sub(r"\s+", "", article_no or "")), full_text)
-        if loose:
-            return {
-                "doc_name": p.name, "article_no": article_no,
-                "text": "", "start_page": 0, "end_page": 0,
-                "error": (
-                    f"조문 헤더로는 매칭되지 않았으나, '{article_no}' 토큰이 본문에 인라인으로 등장합니다. "
-                    f"`search_text` 로 검색해 보세요."
-                ),
-            }
-        return {
-            "doc_name": p.name, "article_no": article_no,
-            "text": "", "start_page": 0, "end_page": 0,
-            "error": f"조문을 찾을 수 없습니다: {article_no!r}",
-        }
+        # Phase H+1 폴백 단계 1: 헤더 매칭 0건 → search_text 로 본문 회수.
+        print(
+            f"[local_doc_mcp] get_article: 헤더 매칭 0건, search_text 폴백 진입 "
+            f"(doc={p.name!r}, article={article_no!r})",
+            file=sys.stderr,
+        )
+        return _article_search_text_fallback(
+            p, article_no, cache, reason="header_no_match",
+        )
 
     start_off = m.start()
     # 다음 조문 헤더 시작 offset
@@ -510,6 +590,19 @@ def get_article(doc_name: str, article_no: str) -> dict[str, Any]:
         # HWP 는 페이지 경계가 없으므로 1 로 통일
         start_page = 1
         end_page = 1
+
+    # Phase H+1 폴백 단계 2: 헤더는 잡혔지만 본문이 임계치 미만 →
+    # 매뉴얼 PDF 의 *목차 페이지* 에서만 잡힌 사례. search_text 폴백.
+    if len(body) < _ARTICLE_BODY_MIN_CHARS:
+        print(
+            f"[local_doc_mcp] get_article: 매칭 본문 {len(body)}자 < {_ARTICLE_BODY_MIN_CHARS}자, "
+            f"search_text 폴백 진입 (doc={p.name!r}, article={article_no!r}, "
+            f"shallow_page={start_page})",
+            file=sys.stderr,
+        )
+        return _article_search_text_fallback(
+            p, article_no, cache, reason="body_too_short",
+        )
 
     return {
         "doc_name": p.name,

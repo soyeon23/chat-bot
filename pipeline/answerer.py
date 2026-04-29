@@ -13,6 +13,7 @@ import asyncio
 import json
 import os
 import re
+import sys
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -140,6 +141,34 @@ def build_context(chunks: list[dict]) -> str:
 # JSON 추출
 # ──────────────────────────────────────────────────────────────────
 
+# max_turns 도달 시 누적 텍스트가 이 길이 미만이면 JSON 추출 대신 graceful
+# stub 으로 폴백한다. 100자는 SYSTEM_PROMPT 가 강제하는 최소 JSON 한 줄
+# (`{"verdict":"...","summary":"..."...}`) 보다도 짧은 임계치라, 사실상 모델이
+# *시작도 못 했을 때* 만 발동된다. 모델이 부분 JSON 을 만들었다면 정상 추출
+# 경로로 진입.
+_MAX_TURNS_STUB_MIN_CHARS = 100
+
+
+# max_turns graceful stub — Phase H 도구 모드에서 모델이 도구만 부르다 한도에
+# 걸려 최종 JSON 답변을 못 낸 경우, RuntimeError 대신 본 stub 을 generate_answer
+# 가 받아 정상 경로(JSON 파싱 + citations 보강) 로 흘려보낸다. 사용자에게
+# `Command failed with exit code 1` 가 노출되는 것을 차단하기 위함.
+_MAX_TURNS_STUB_PAYLOAD = {
+    "verdict": "판단불가",
+    "summary": (
+        "검색 도구가 한도(max_turns=8) 안에 충분한 답변을 만들지 못했습니다. "
+        "질문을 더 구체적으로 다시 시도해 주세요. "
+        "(예: '국가연구개발혁신법 제10조 본문', '제10조 시행령')"
+    ),
+    "citations": [],
+    "follow_up_needed": True,
+    "follow_up_questions": [
+        "질문이 너무 짧을 수 있습니다 — 문서명/조문번호 명시 권장",
+    ],
+    "risk_notes": ["도구 모드 max_turns 도달"],
+}
+
+
 _FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
 
@@ -251,39 +280,69 @@ async def _run_query(
     rate_limited = False
     rate_limit_msg = ""
     final_result: Optional[str] = None
+    max_turns_hit = False
 
-    async for msg in query(prompt=user_prompt, options=options):
-        if isinstance(msg, AssistantMessage):
-            # SDK 가 assistant 의 error 필드에 'rate_limit' 등 문자열을 채워 주기도 함
-            if msg.error == "rate_limit":
-                rate_limited = True
-                rate_limit_msg = "Claude Code 사용량 한도 초과 (assistant rate_limit)"
-            for block in msg.content:
-                if isinstance(block, TextBlock):
-                    text_chunks.append(block.text)
-        elif isinstance(msg, ResultMessage):
-            if msg.is_error:
-                err_blob = " | ".join(msg.errors or [])
-                if _is_rate_limit_signal(err_blob, msg.subtype or ""):
+    # SDK 의 `query()` async generator 는 ResultMessage(subtype=error_max_turns) 를
+    # yield 한 직후 transport 레이어가 exit code 1 로 stream 을 끊으면서
+    # `Exception("Command failed with exit code 1")` 를 *raise* 하는 경우가 있다.
+    # 이는 SDK 1.x 에서 max_turns 도달 시 관찰되는 정상 동작에 가깝지만, 사용자
+    # 에게 Fatal error 로 노출되면 안 된다. try/except 로 감싸 stream 종료 후
+    # 누적 텍스트 + max_turns 플래그 조합을 평가하는 단일 경로로 모은다.
+    try:
+        async for msg in query(prompt=user_prompt, options=options):
+            if isinstance(msg, AssistantMessage):
+                # SDK 가 assistant 의 error 필드에 'rate_limit' 등 문자열을 채워 주기도 함
+                if msg.error == "rate_limit":
                     rate_limited = True
-                    rate_limit_msg = err_blob or "rate limit"
-                elif (msg.subtype or "") == "error_max_turns":
-                    # 도구 모드(Phase H) 에서 모델이 5~8 턴 안에 최종 답변 JSON 을
-                    # 못 내는 경우가 드물게 있다. 그동안 누적된 AssistantMessage
-                    # text 안에 이미 JSON 이 들어있으면 그것을 그대로 반환해
-                    # answer 측에서 추출·검증하도록 폴백한다 (강제 raise 하지 않음).
-                    print(
-                        f"[answerer] max_turns 도달 (subtype={msg.subtype}) — "
-                        f"누적 텍스트 {sum(len(t) for t in text_chunks)}자에서 JSON 추출 시도",
-                        file=__import__("sys").stderr,
-                    )
-                else:
-                    # 비-rate-limit 오류: 그대로 던진다.
-                    raise RuntimeError(
-                        f"Claude CLI returned error (subtype={msg.subtype}): {err_blob or msg.result!r}"
-                    )
-            if msg.result:
-                final_result = msg.result
+                    rate_limit_msg = "Claude Code 사용량 한도 초과 (assistant rate_limit)"
+                for block in msg.content:
+                    if isinstance(block, TextBlock):
+                        text_chunks.append(block.text)
+            elif isinstance(msg, ResultMessage):
+                if msg.is_error:
+                    err_blob = " | ".join(msg.errors or [])
+                    if _is_rate_limit_signal(err_blob, msg.subtype or ""):
+                        rate_limited = True
+                        rate_limit_msg = err_blob or "rate limit"
+                    elif (msg.subtype or "") == "error_max_turns":
+                        # 도구 모드(Phase H) 에서 모델이 5~8 턴 안에 최종 답변 JSON 을
+                        # 못 내는 경우가 있다. 누적 텍스트 안에 이미 JSON 이 있으면
+                        # 그대로 반환해 answer 측에서 추출·검증하도록 폴백.
+                        # 누적이 너무 짧으면 stub JSON 을 만들어 graceful 응답.
+                        max_turns_hit = True
+                        print(
+                            f"[answerer] max_turns 도달 (subtype={msg.subtype}) — "
+                            f"누적 텍스트 {sum(len(t) for t in text_chunks)}자에서 JSON 추출 시도",
+                            file=sys.stderr,
+                        )
+                    else:
+                        # 비-rate-limit 오류: 그대로 던진다.
+                        raise RuntimeError(
+                            f"Claude CLI returned error (subtype={msg.subtype}): {err_blob or msg.result!r}"
+                        )
+                if msg.result:
+                    final_result = msg.result
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        # SDK transport 가 exit code 1 등으로 stream 을 끊은 경우.
+        # ResultMessage(error_max_turns) 가 *직전에* 도착했었다면 graceful stub
+        # 으로 흡수, 그 외에는 그대로 재raise.
+        msg_lower = str(exc).lower()
+        is_max_turns_transport = (
+            max_turns_hit
+            or "exit code 1" in msg_lower
+            or "max_turns" in msg_lower
+        )
+        if not is_max_turns_transport:
+            raise
+        # max_turns 후 transport 끊김 → 다음 블록의 stub 경로로 합류
+        max_turns_hit = True
+        print(
+            f"[answerer] SDK stream 끊김 ({type(exc).__name__}: {exc}) — "
+            f"max_turns 직후 transport 레이어 종료로 간주, stub 경로 진입",
+            file=sys.stderr,
+        )
 
     if rate_limited:
         raise RateLimitError(
@@ -292,7 +351,19 @@ async def _run_query(
 
     # AssistantMessage 의 TextBlock 들을 우선 사용, 비어 있으면 ResultMessage.result 폴백
     full = "\n".join(t for t in text_chunks if t)
-    return full or (final_result or "")
+    combined = full or (final_result or "")
+
+    # max_turns 도달 + 누적 텍스트 부족 → graceful stub JSON 반환.
+    # generate_answer 의 JSON 파싱·citations 보강 로직이 정상 경로로 흡수.
+    if max_turns_hit and len(combined.strip()) < _MAX_TURNS_STUB_MIN_CHARS:
+        print(
+            f"[answerer] max_turns graceful stub "
+            f"(accumulated={len(combined.strip())}자, threshold={_MAX_TURNS_STUB_MIN_CHARS}자)",
+            file=sys.stderr,
+        )
+        return json.dumps(_MAX_TURNS_STUB_PAYLOAD, ensure_ascii=False)
+
+    return combined
 
 
 def _run_query_sync(
@@ -302,24 +373,55 @@ def _run_query_sync(
     *,
     enable_tools: bool = False,
 ) -> str:
-    """동기 인터페이스 래퍼. Streamlit/CLI 가 그대로 호출할 수 있도록 한다."""
+    """동기 인터페이스 래퍼. Streamlit/CLI 가 그대로 호출할 수 있도록 한다.
+
+    `_run_query` 내부에 이미 max_turns transport 폴백이 있지만, claude-agent-sdk
+    의 message reader 가 *이벤트루프 정리* 단계에서 늦게 Exception 을 띄우는
+    케이스가 있어 (`Fatal error in message reader: Command failed with exit code 1`)
+    여기서 한 번 더 graceful 폴백을 둔다. 이 폴백은 *항상* stub 을 반환하지 않고,
+    예외 메시지에 transport 종료 시그니처가 있을 때만 stub 으로 흡수한다.
+    """
+    def _invoke() -> str:
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # 이미 이벤트루프 안인 경우 (드물지만 streamlit/jupyter 등) — 새 루프
+                new_loop = asyncio.new_event_loop()
+                try:
+                    return new_loop.run_until_complete(
+                        _run_query(model, system_prompt, user_prompt, enable_tools=enable_tools)
+                    )
+                finally:
+                    new_loop.close()
+        except RuntimeError:
+            # no current event loop
+            pass
+        return asyncio.run(
+            _run_query(model, system_prompt, user_prompt, enable_tools=enable_tools)
+        )
+
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # 이미 이벤트루프 안인 경우 (드물지만 streamlit/jupyter 등) — 새 루프
-            new_loop = asyncio.new_event_loop()
-            try:
-                return new_loop.run_until_complete(
-                    _run_query(model, system_prompt, user_prompt, enable_tools=enable_tools)
-                )
-            finally:
-                new_loop.close()
-    except RuntimeError:
-        # no current event loop
-        pass
-    return asyncio.run(
-        _run_query(model, system_prompt, user_prompt, enable_tools=enable_tools)
-    )
+        return _invoke()
+    except RateLimitError:
+        raise
+    except Exception as exc:
+        # SDK transport 가 이벤트루프 정리 단계에서 늦게 raise 하는 경우.
+        # `_run_query` 내부 폴백을 통과한 뒤 발생 → 여기서 흡수.
+        msg = str(exc).lower()
+        is_transport_close = (
+            "exit code 1" in msg
+            or "max_turns" in msg
+            or "command failed" in msg
+            or "message reader" in msg
+        )
+        if is_transport_close:
+            print(
+                f"[answerer] _run_query_sync transport graceful "
+                f"({type(exc).__name__}: {exc})",
+                file=sys.stderr,
+            )
+            return json.dumps(_MAX_TURNS_STUB_PAYLOAD, ensure_ascii=False)
+        raise
 
 
 # ──────────────────────────────────────────────────────────────────

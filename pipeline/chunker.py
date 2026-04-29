@@ -43,7 +43,11 @@ from pipeline.pdf_parser import ParseResult, ParsedPage
 #         제한 (`^[ \t]{0,3}`). 진짜 시행령/매뉴얼 본문 헤더는 0~2칸 들여쓰기로
 #         시작하므로 무영향. 매뉴얼 표 셀 인용 (≥10칸 들여쓰기)은 차단.
 #         별표/부칙 패턴은 영향 받지 않음 (그대로 `^[\s■◎●]*`).
-CHUNKER_VERSION = "1.3.4"
+# 1.4.0 = 매뉴얼/가이드 doc_type 페이지 기반 청킹 라우팅(_split_by_pages) 추가.
+#         매뉴얼 PDF 의 article-aware split false positive (표 셀, 인라인 인용) 회귀 종결.
+#         article_no 를 'p.{N}' 형식으로 부여. 페이지 boundary 정확 보장 → 페이지
+#         직접 조회·페이지 분포 정상화. 시행령 별표·시행규칙 별지·법령 본체는 영향 없음.
+CHUNKER_VERSION = "1.4.0"
 
 
 # 조문 구조 분할 패턴 (우선순위 순)
@@ -280,6 +284,60 @@ def _split_byeolpyo_file(
     }]
 
 
+def _split_by_pages(
+    pages: list[ParsedPage],
+    boundaries: list[tuple[int, int]],
+    max_len: int = MAX_CHUNK_LEN,
+) -> list[dict]:
+    """페이지 기반 청킹 — 매뉴얼·가이드 doc_type 전용 (1.4.0).
+
+    각 페이지를 단일 청크로 만들되, max_len 초과 시 항목 마커 (_ITEM_SPLIT_RE) 로
+    sub-split. article_no 는 'p.{N}' 또는 'p.{N} (part X/Y)'.
+
+    페이지 boundary 가 정확히 보장됨 — chunker 의 page 태깅 버그 회피.
+    article-aware split 의 false positive (표 셀, 인라인 인용) 회귀 종결.
+
+    Args:
+        pages: 빈 페이지가 제거된 ParsedPage 리스트 (chunk_document 진입부에서 필터링).
+        boundaries: pages 와 1:1 대응되는 (page_start_offset, page_num) 리스트.
+        max_len: 페이지 텍스트 길이 임계 — 초과 시 sub-split.
+
+    Returns:
+        _split_by_articles 와 동일한 dict 스키마 — text/article_no/article_title/page/start/end.
+        chunk_document 의 후속 길이 제한 단계가 part X/Y 라벨을 자동 부여하므로
+        본 함수는 *페이지 단위* dict 만 반환한다 (sub-split 은 _split_long_text 가 담당).
+    """
+    if not pages:
+        return []
+
+    # boundaries 가 비거나 pages 와 길이 다른 경우 대비
+    boundary_map = {pnum: start for start, pnum in boundaries}
+
+    chunks: list[dict] = []
+    for p in pages:
+        text = p.text.strip()
+        if len(text) < MIN_CHUNK_LEN:
+            # 빈/너무 짧은 페이지는 스킵 (의미 단위 미달)
+            continue
+
+        # full_text 안 절대 offset — chunk_document 의 forced-split offset 매핑이
+        # 누적 문자 비율로 페이지 boundary 안에서만 움직이도록 page_start ~ page_end
+        # 범위로 제한한다. 페이지 안 분할이라 어차피 page boundary 를 넘지 않는다.
+        page_start = boundary_map.get(p.page_num, 0)
+        page_end = page_start + len(p.text)
+
+        chunks.append({
+            "text": text,
+            "article_no": f"p.{p.page_num}",
+            "article_title": "",
+            "page": p.page_num,
+            "start": page_start,
+            "end": page_end,
+        })
+
+    return chunks
+
+
 def _split_faq(full_text: str, boundaries: list[tuple[int, int]]) -> list[dict]:
     """FAQ 문서: 1문1답 단위로 분할."""
     combined = "|".join(FAQ_PATTERNS)
@@ -399,12 +457,31 @@ def chunk_document(
     is_byeolpyo_file = byeolpyo_match is not None
     item_split_re = _BYEOLPYO_ITEM_SPLIT_RE if is_byeolpyo_file else _ITEM_SPLIT_RE
 
+    # 매뉴얼/가이드 doc_type 판별 (Phase A1, chunker 1.4.0).
+    # 매뉴얼 PDF 는 운영 가이드이지 법령 본문이 아니므로 article-aware split 부적합.
+    # `제N조` 토큰이 본문 안 인용/표 셀로 다수 등장해 false positive 폭증 — 회귀.
+    # → 페이지 기반 청킹으로 라우팅. article_no='p.{N}', 페이지 boundary 정확 보장.
+    #
+    # 신호:
+    #   a. doc_type 이 "매뉴얼" / "가이드" / "handbook"
+    #   b. source_file 에 "매뉴얼" 또는 "본권" 포함 (현 매뉴얼 PDF 명: "[본권] 25년도 ...")
+    #
+    # 주의: "본체" (혁신법 본체 PDF 등) 는 신호로 쓰지 않는다. 본체 = 법령 본문이라
+    # article-aware split 이 적합. "본권" 만 매뉴얼 신호로 사용.
+    is_manual = (
+        doc_type in {"매뉴얼", "가이드", "handbook"}
+        or "매뉴얼" in source_nfc
+        or "본권" in source_nfc
+    )
+
     if is_byeolpyo_file:
         raw_chunks = _split_byeolpyo_file(
             full_text,
             boundaries,
             byeolpyo_n=byeolpyo_match.group(1),
         )
+    elif is_manual:
+        raw_chunks = _split_by_pages(pages, boundaries, MAX_CHUNK_LEN)
     elif doc_type.upper() == "FAQ":
         raw_chunks = _split_faq(full_text, boundaries)
     else:

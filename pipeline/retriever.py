@@ -43,6 +43,21 @@ def get_qdrant_client() -> QdrantClient:
     return QdrantClient(path=_QDRANT_PATH)
 
 
+def _collection_exists(client: QdrantClient) -> bool:
+    """컬렉션이 존재하는지 확인. 첫 셋업한 PC 에서 ValueError 안 뜨게.
+
+    Streamlit 앱이 시작 시점에 retriever 를 호출할 수 있는데, 컬렉션이 아직
+    없으면(예: 다른 PC 에서 git clone 후 sync 안 돌린 상태) `Collection
+    rnd_law_chunks not found` 가 raise 된다. 이 함수는 호출자가 빈 결과로
+    graceful 폴백할 수 있도록 boolean 만 반환한다.
+    """
+    try:
+        names = {c.name for c in client.get_collections().collections}
+    except Exception:
+        return False
+    return _COLLECTION in names
+
+
 def _payload_to_result(point_id, score: float, payload: dict) -> dict:
     return {
         "id": str(point_id),
@@ -73,6 +88,8 @@ def search_chunks(
     신규 코드는 `search_chunks_smart`를 권장. 이 함수는 역호환을 위해 유지.
     """
     client = get_qdrant_client()
+    if not _collection_exists(client):
+        return []
 
     query_filter = None
     if doc_type is not None:
@@ -229,6 +246,8 @@ def search_chunks_smart(
         기존 search_chunks와 동일한 dict 리스트 (score 키 포함).
     """
     client = get_qdrant_client()
+    if not _collection_exists(client):
+        return []
     base_filter = _doc_type_filter(doc_type)
     if hints is None:
         hints = parse_query(question or "")
@@ -533,6 +552,8 @@ def search_chunks_hybrid(
     from pipeline.bm25_index import Bm25Corpus  # 지연 import — 모듈 cold start 회피
 
     client = get_qdrant_client()
+    if not _collection_exists(client):
+        return []
     base_filter = _doc_type_filter(doc_type)
     hints = parse_query(question or "")
 

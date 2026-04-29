@@ -22,10 +22,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from pipeline.chunker import (
     ARTICLE_PATTERNS,
     MAX_CHUNK_LEN,
+    MIN_CHUNK_LEN,
     _BYEOLPYO_FILE_RE,
     _BYEOLPYO_ITEM_SPLIT_RE,
     _ITEM_SPLIT_RE,
+    _build_page_boundary_map,
     _split_by_articles,
+    _split_by_pages,
     _split_byeolpyo_file,
     _split_long_text,
     chunk_document,
@@ -625,6 +628,276 @@ class TestByeolpyoRouting(unittest.TestCase):
                 _BYEOLPYO_FILE_RE.search(name),
                 f"매칭되면 안 됨: {name!r}",
             )
+
+
+class TestManualPageRouting(unittest.TestCase):
+    """Phase A1, chunker 1.4.0 — 매뉴얼/가이드 doc_type 페이지 기반 청킹 라우팅.
+
+    매뉴얼 PDF 의 article-aware split false positive (표 셀 0칸 들여쓰기, 인라인 인용)
+    회귀 종결. 신호:
+      - doc_type ∈ {"매뉴얼", "가이드", "handbook"}
+      - source_file 에 "매뉴얼" 또는 "본권" 포함 ("본체" 는 무시)
+    """
+
+    @staticmethod
+    def _make_parse_result(source_file: str, page_texts: list[str]) -> ParseResult:
+        """페이지 텍스트 리스트 → ParseResult (1-indexed page_num)."""
+        return ParseResult(
+            source_file=source_file,
+            pages=[
+                ParsedPage(page_num=i + 1, text=t, needs_ocr=False)
+                for i, t in enumerate(page_texts)
+            ],
+        )
+
+    # ────────────────────────────────────────────────────────────
+    # 1.4.0-1 — 매뉴얼 PDF 라우팅 진입 + article_no="p.{N}" 형식
+    # ────────────────────────────────────────────────────────────
+    def test_1_4_0_manual_pdf_routes_to_page_split(self):
+        # 실제 매뉴얼 PDF 명 형태: "[본권] 25년도 국가연구개발혁신법 매뉴얼_배포용.pdf"
+        # 본문에 `제13조(...)`, `[별표 5]` 같은 인용 라벨이 있어도 split 트리거 안 됨.
+        page_texts = [
+            "제1장 총칙\n혁신법은 국가연구개발사업의 기획·관리·평가·활용 등에 관한 사항을 규정한다.",
+            "제2장 연구개발사업의 기획\n          제13조(연구개발비의 지급 및 사용 등) 제19조(연구개발비의 지원과 부담)\n자세한 내용은 [별표 5]에 따라 처리한다.",
+            "[별표1]을 따름.\n학생인건비는 법 제32조에 따라 지급한다.",
+        ]
+        pr = self._make_parse_result(
+            "[본권] 25년도 국가연구개발혁신법 매뉴얼_배포용.pdf",
+            page_texts,
+        )
+        chunks = chunk_document(
+            parse_result=pr,
+            doc_name="25년도 국가연구개발혁신법 매뉴얼",
+            doc_type="매뉴얼",
+            effective_date="2025-01-01",
+            revised_date="2025-01-01",
+            is_current=True,
+        )
+
+        self.assertEqual(len(chunks), 3, f"페이지 3개 → 청크 3개. 실제: {len(chunks)}")
+        # article_no 가 p.{N} 형식
+        self.assertEqual(chunks[0].article_no, "p.1")
+        self.assertEqual(chunks[1].article_no, "p.2")
+        self.assertEqual(chunks[2].article_no, "p.3")
+        # page 매핑 정확 (boundary 가 페이지 단위로 정확)
+        self.assertEqual(chunks[0].page, 1)
+        self.assertEqual(chunks[1].page, 2)
+        self.assertEqual(chunks[2].page, 3)
+        # article-aware split 의 false positive (제13조, [별표 5], [별표1]) 가 article_no 로
+        # 잘못 잡히지 않음
+        for c in chunks:
+            self.assertFalse(
+                c.article_no.startswith("제"),
+                f"article_no 가 조문 헤더로 잘못 잡힘: {c.article_no!r}",
+            )
+            self.assertFalse(
+                c.article_no.startswith("별표"),
+                f"article_no 가 별표 헤더로 잘못 잡힘: {c.article_no!r}",
+            )
+        # 본문 키워드 보존
+        joined = "\n".join(c.text for c in chunks)
+        self.assertIn("학생인건비", joined)
+        self.assertIn("[별표 5]", joined)
+
+    # ────────────────────────────────────────────────────────────
+    # 1.4.0-2 — 짧은 페이지 1개 → 청크 1개 (sub-split 안 함)
+    # ────────────────────────────────────────────────────────────
+    def test_1_4_0_short_page_single_chunk(self):
+        text = "이 페이지는 짧은 본문이므로 단일 청크로 유지된다. 학생인건비 관련 일반론."
+        pr = self._make_parse_result(
+            "[본권] 매뉴얼.pdf",
+            [text],
+        )
+        chunks = chunk_document(
+            parse_result=pr,
+            doc_name="매뉴얼",
+            doc_type="매뉴얼",
+            is_current=True,
+        )
+        self.assertEqual(len(chunks), 1)
+        self.assertEqual(chunks[0].article_no, "p.1")  # part 표기 없음
+        self.assertEqual(chunks[0].page, 1)
+        self.assertIn("학생인건비", chunks[0].text)
+
+    # ────────────────────────────────────────────────────────────
+    # 1.4.0-3 — 긴 페이지: part X/Y 분할, 모든 part 의 page 동일
+    # ────────────────────────────────────────────────────────────
+    def test_1_4_0_long_page_forced_split_within_page(self):
+        # MAX_CHUNK_LEN(2000) 의 ~2.5배. _split_long_text 가 sub-split 적용.
+        # 항목 마커가 본문에 다수 등장해 의미 단위 분할이 가능해야 한다.
+        sections = []
+        for i in range(1, 16):
+            # 각 항목당 ~340자 → 총 5100자
+            body = "본문 단락. " * 30
+            sections.append(f"\n{i}. 항목 제{i}조\n{body}")
+        big_page = "매뉴얼 페이지 — 긴 본문" + "".join(sections)
+        pr = self._make_parse_result(
+            "[본권] 매뉴얼.pdf",
+            [big_page],
+        )
+        chunks = chunk_document(
+            parse_result=pr,
+            doc_name="매뉴얼",
+            doc_type="매뉴얼",
+            is_current=True,
+        )
+
+        self.assertGreater(len(chunks), 1, f"긴 페이지는 sub-split. 실제 청크 수: {len(chunks)}")
+        # 모든 part 가 'p.1 (part X/Y)' 형식이고 page=1 동일
+        total = len(chunks)
+        for idx, c in enumerate(chunks, start=1):
+            self.assertRegex(
+                c.article_no,
+                rf"^p\.1 \(part {idx}/{total}\)$",
+                f"part 라벨 불일치: {c.article_no!r}",
+            )
+            self.assertEqual(c.page, 1, f"part {idx}: 페이지 불일치 ({c.page})")
+            # 길이 제약 확인
+            self.assertLessEqual(len(c.text), MAX_CHUNK_LEN, f"part {idx} 가 max_len 초과")
+
+    # ────────────────────────────────────────────────────────────
+    # 1.4.0-4 — 별표 HWP 는 1.4.0 영향 없음 (별표 라우팅 그대로)
+    # ────────────────────────────────────────────────────────────
+    def test_1_4_0_byeolpyo_file_unaffected(self):
+        source_file = "[별표 2] 연구개발비 사용용도(제20조제1항 관련)(국가연구개발혁신법 시행령).hwp"
+        text = """■ 국가연구개발혁신법 시행령 [별표 2] <개정 2026. 3. 10.>
+
+연구개발비 사용용도(제20조제1항 관련)
+
+1. 직접비
+가. 인건비
+나. 학생인건비
+
+2. 간접비
+가. 일반관리비 등
+"""
+        pr = ParseResult(
+            source_file=source_file,
+            pages=[ParsedPage(page_num=1, text=text, needs_ocr=False)],
+        )
+        chunks = chunk_document(
+            parse_result=pr,
+            doc_name="국가연구개발혁신법 시행령 [별표 2]",
+            doc_type="시행령",
+            is_current=True,
+        )
+        # 별표 라우팅이 우선이므로 article_no 가 '별표 2' 로 시작
+        self.assertGreater(len(chunks), 0)
+        for c in chunks:
+            self.assertTrue(
+                c.article_no.startswith("별표 2"),
+                f"별표 라우팅이 1.4.0 매뉴얼 라우팅에 의해 가로채지면 안 됨: {c.article_no!r}",
+            )
+            self.assertFalse(
+                c.article_no.startswith("p."),
+                f"매뉴얼 라우팅으로 잘못 들어감: {c.article_no!r}",
+            )
+
+    # ────────────────────────────────────────────────────────────
+    # 1.4.0-5 — 법령 HWP 는 article 라우팅 그대로
+    #
+    # source_file 에 "본체" 가 있어도 매뉴얼 신호가 아니어야 한다 (혁신법 본체 PDF 가
+    # 추가될 가능성 대비). 시행령 본체는 article-aware split 적합.
+    # ────────────────────────────────────────────────────────────
+    def test_1_4_0_law_hwp_unaffected(self):
+        # 가짜 시행령 본체 (별표 라우팅에 매칭 안 되는 source_file)
+        source_file = "국가연구개발혁신법 시행령(대통령령)(제36163호)(20260310).hwp"
+        text = """제13조(연구개발비의 사용)
+① 연구개발기관의 장은 법 제32조제1항에 따라 ...
+② 다음 각 호의 어느 하나에 해당하는 경우 ...
+
+제15조(연구개발비의 정산)
+① 연구개발기관의 장은 ...
+"""
+        pr = ParseResult(
+            source_file=source_file,
+            pages=[ParsedPage(page_num=1, text=text, needs_ocr=False)],
+        )
+        chunks = chunk_document(
+            parse_result=pr,
+            doc_name="국가연구개발혁신법 시행령",
+            doc_type="시행령",
+            is_current=True,
+        )
+        # article-aware split 그대로 — 제13조/제15조 2청크
+        self.assertEqual(len(chunks), 2, f"제13조/제15조 2청크. 실제: {len(chunks)}")
+        self.assertTrue(chunks[0].article_no.startswith("제13조"))
+        self.assertTrue(chunks[1].article_no.startswith("제15조"))
+        for c in chunks:
+            self.assertFalse(
+                c.article_no.startswith("p."),
+                f"법령 본체가 매뉴얼 라우팅으로 잘못 빠짐: {c.article_no!r}",
+            )
+
+    # ────────────────────────────────────────────────────────────
+    # 1.4.0-6 — doc_type="handbook" 도 페이지 라우팅 진입
+    # ────────────────────────────────────────────────────────────
+    def test_1_4_0_doc_type_handbook_routes(self):
+        # source_file 에 매뉴얼 신호가 없어도, doc_type 만으로 라우팅 진입.
+        source_file = "operations_guide.pdf"
+        page_texts = [
+            "Operations Guide — 제1장. 총론. 운영 절차에 대한 안내.",
+            "제2장. 위탁개발 협약. 제13조(연구개발비) 인용 — split 트리거 아님.",
+        ]
+        pr = self._make_parse_result(source_file, page_texts)
+        chunks = chunk_document(
+            parse_result=pr,
+            doc_name="Operations Guide",
+            doc_type="handbook",
+            is_current=True,
+        )
+        self.assertEqual(len(chunks), 2)
+        self.assertEqual(chunks[0].article_no, "p.1")
+        self.assertEqual(chunks[1].article_no, "p.2")
+
+    # ────────────────────────────────────────────────────────────
+    # 1.4.0-7 — _split_by_pages 단위 함수 직접 검증
+    # ────────────────────────────────────────────────────────────
+    def test_1_4_0_split_by_pages_unit(self):
+        pages = [
+            ParsedPage(page_num=1, text="첫 페이지 본문 — 충분히 긴 텍스트로 MIN_CHUNK_LEN 초과.", needs_ocr=False),
+            ParsedPage(page_num=2, text="짧음", needs_ocr=False),  # MIN_CHUNK_LEN 미만 → 스킵
+            ParsedPage(page_num=3, text="세 번째 페이지 본문 — 정상 길이로 청크 생성된다.", needs_ocr=False),
+        ]
+        boundaries = _build_page_boundary_map(pages)
+        chunks = _split_by_pages(pages, boundaries, max_len=MAX_CHUNK_LEN)
+        # 페이지 2 는 스킵 → 2개 청크
+        self.assertEqual(len(chunks), 2)
+        self.assertEqual(chunks[0]["article_no"], "p.1")
+        self.assertEqual(chunks[0]["page"], 1)
+        self.assertEqual(chunks[1]["article_no"], "p.3")
+        self.assertEqual(chunks[1]["page"], 3)
+        # start/end 가 페이지 boundary 와 일치
+        self.assertEqual(chunks[0]["start"], 0)
+        self.assertEqual(chunks[0]["end"], len(pages[0].text))
+
+    # ────────────────────────────────────────────────────────────
+    # 1.4.0-8 — source_file 에 "본체" 만 있고 "본권" 없으면 매뉴얼 아님
+    #
+    # 향후 혁신법 본체 PDF 가 추가될 경우 article 라우팅으로 가야 함을 보장.
+    # ────────────────────────────────────────────────────────────
+    def test_1_4_0_bonche_not_manual_signal(self):
+        source_file = "국가연구개발혁신법 본체.pdf"
+        text = """제13조(연구개발비의 사용)
+① 연구개발기관의 장은 법 제32조제1항에 따라 ...
+
+제15조(연구개발비의 정산)
+① 연구개발기관의 장은 ...
+"""
+        pr = ParseResult(
+            source_file=source_file,
+            pages=[ParsedPage(page_num=1, text=text, needs_ocr=False)],
+        )
+        chunks = chunk_document(
+            parse_result=pr,
+            doc_name="국가연구개발혁신법 본체",
+            doc_type="법률",
+            is_current=True,
+        )
+        # article-aware split 으로 가야 함
+        self.assertEqual(len(chunks), 2)
+        self.assertTrue(chunks[0].article_no.startswith("제13조"))
+        self.assertTrue(chunks[1].article_no.startswith("제15조"))
 
 
 if __name__ == "__main__":

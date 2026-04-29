@@ -179,7 +179,15 @@ def save_metadata(meta: dict, path: Path = METADATA_PATH) -> None:
 # ──────────────────────────────────────────────────────────────────
 
 def _scroll_all(client) -> list:
-    """Qdrant 컬렉션 전체 scroll."""
+    """Qdrant 컬렉션 전체 scroll. 컬렉션 미존재 시 빈 리스트 반환 (fresh PC 셋업 호환)."""
+    # 컬렉션이 없으면 즉시 빈 리스트 — 첫 셋업한 다른 PC 에서 ValueError 안 뜨게.
+    try:
+        existing = {c.name for c in client.get_collections().collections}
+    except Exception:
+        existing = set()
+    if COLLECTION not in existing:
+        return []
+
     out = []
     nxt = None
     while True:
