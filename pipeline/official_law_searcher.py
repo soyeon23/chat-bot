@@ -18,7 +18,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-_OC = os.getenv("KOREAN_LAW_OC", "")
+def _get_oc() -> str:
+    """런타임 OC(법제처 발급 키) 결정. config.json > env > 빈 문자열."""
+    try:
+        from pipeline.config_store import load_config
+        cfg = load_config()
+        if cfg.korean_law_oc:
+            return cfg.korean_law_oc
+    except Exception:
+        pass
+    return os.getenv("KOREAN_LAW_OC", "")
 _BASE = "https://www.law.go.kr/DRF"
 _TIMEOUT = 10
 _TEXT_LIMIT = 2000
@@ -58,7 +67,7 @@ def _search_laws(query: str, display: int = 3) -> list[dict]:
     try:
         resp = requests.get(
             f"{_BASE}/lawSearch.do",
-            params={"OC": _OC, "target": "law", "type": "XML",
+            params={"OC": _get_oc(), "target": "law", "type": "XML",
                     "query": query, "display": display},
             timeout=_TIMEOUT,
         )
@@ -93,7 +102,7 @@ def _fetch_law_text(mst: str, law_name: str = "") -> str:
     try:
         resp = requests.get(
             f"{_BASE}/lawService.do",
-            params={"OC": _OC, "target": "law", "MST": mst, "type": "XML"},
+            params={"OC": _get_oc(), "target": "law", "MST": mst, "type": "XML"},
             timeout=_TIMEOUT,
         )
         root = ET.fromstring(resp.text)
@@ -130,7 +139,7 @@ def _search_precedents(query: str, display: int = 3) -> list[dict]:
     try:
         resp = requests.get(
             f"{_BASE}/lawSearch.do",
-            params={"OC": _OC, "target": "prec", "type": "XML",
+            params={"OC": _get_oc(), "target": "prec", "type": "XML",
                     "query": query, "display": display, "section": "all"},
             timeout=_TIMEOUT,
         )
@@ -167,7 +176,7 @@ def _search_admin_rules(query: str, display: int = 2) -> list[dict]:
     try:
         resp = requests.get(
             f"{_BASE}/lawSearch.do",
-            params={"OC": _OC, "target": "admrul", "type": "XML",
+            params={"OC": _get_oc(), "target": "admrul", "type": "XML",
                     "query": query, "display": display},
             timeout=_TIMEOUT,
         )

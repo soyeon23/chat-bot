@@ -7,6 +7,10 @@ from langchain_huggingface import HuggingFaceEmbeddings
 MODEL_NAME = "jhgan/ko-sroberta-multitask"
 EMBED_DIM = 768
 
+# 임베딩 모델 식별자. sync(증분 동기화) 가 모델 교체를 감지해 모든
+# 파일을 stale 로 마크하는 데 쓴다. 모델명을 그대로 사용한다.
+EMBEDDER_VERSION = MODEL_NAME
+
 # 모듈 로드 시 한 번만 초기화 (첫 호출 때 모델 다운로드)
 _embeddings: HuggingFaceEmbeddings | None = None
 

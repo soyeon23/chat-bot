@@ -26,10 +26,10 @@ def load_done() -> set[str]:
     return set()
 
 
-def mark_done(pdf_path: Path) -> None:
+def mark_done(file_path: Path) -> None:
     DONE_LOG.parent.mkdir(parents=True, exist_ok=True)
     with open(DONE_LOG, "a", encoding="utf-8") as f:
-        f.write(str(pdf_path) + "\n")
+        f.write(str(file_path) + "\n")
 
 
 # ── 메타데이터 자동 추출 ─────────────────────────────────────────────────────
@@ -41,6 +41,13 @@ def _extract_date(text: str) -> str:
         d = m.group(1)
         return f"{d[:4]}-{d[4:6]}-{d[6:]}"
     return ""
+
+
+_HWP_EXTS = {".hwp", ".hwpx"}
+
+
+def _is_hwp(path: Path) -> bool:
+    return path.suffix.lower() in _HWP_EXTS
 
 
 def _infer_doc_type(name: str) -> str:
@@ -77,6 +84,7 @@ def _clean_doc_name(stem: str) -> str:
 
 
 def get_metadata(pdf_path: Path) -> dict:
+    """파일명에서 doc_name / doc_type / 날짜 추출 (PDF·HWP 공용)."""
     stem = pdf_path.stem
     date = _extract_date(stem)
 
@@ -105,6 +113,7 @@ def get_metadata(pdf_path: Path) -> dict:
 # ── 단일 PDF 인덱싱 ──────────────────────────────────────────────────────────
 
 def ingest_one(pdf_path: Path) -> bool:
+    """PDF 또는 HWP/HWPX 파일 1개를 인덱싱한다 (확장자로 자동 분기)."""
     meta = get_metadata(pdf_path)
     stem = pdf_path.stem
 
@@ -112,9 +121,13 @@ def ingest_one(pdf_path: Path) -> bool:
     print(f"  doc_type : {meta['doc_type']}  |  날짜: {meta['effective_date'] or '미상'}")
 
     try:
-        from pipeline.pdf_parser import parse_pdf, validate_parse_result
-        result = parse_pdf(pdf_path, save_raw=False)
-        validate_parse_result(result)
+        if _is_hwp(pdf_path):
+            from pipeline.hwp_parser import parse_hwp
+            result = parse_hwp(pdf_path, save_raw=False)
+        else:
+            from pipeline.pdf_parser import parse_pdf, validate_parse_result
+            result = parse_pdf(pdf_path, save_raw=False)
+            validate_parse_result(result)
 
         if not result.pages or not result.full_text().strip():
             print("  [건너뜀] 텍스트 없음")
@@ -156,20 +169,54 @@ def ingest_one(pdf_path: Path) -> bool:
 def main() -> None:
     force = "--force" in sys.argv
 
-    # 대상 PDF: versions/ 제외, chunks·raw·metadata 하위 폴더 제외
+    # 대상 파일: versions/ 제외, chunks·raw·metadata 하위 폴더 제외
     # data/uploads/ 는 포함 (앱 업로드 파일)
     _EXCLUDE_PARTS = {"versions", "chunks", "raw", "metadata"}
-    pdf_files = sorted(BASE_DIR.rglob("*.pdf"))
-    pdf_files = [
-        p for p in pdf_files
-        if not _EXCLUDE_PARTS.intersection(p.parts)
-        and p.stat().st_size > 1000  # 1KB 미만 빈 파일 제외
-    ]
+
+    def _filter(paths: list[Path]) -> list[Path]:
+        return [
+            p for p in paths
+            if not _EXCLUDE_PARTS.intersection(p.parts)
+            and p.exists()
+            and p.stat().st_size > 1000  # 1KB 미만 빈 파일 제외
+        ]
+
+    pdf_files = _filter(sorted(BASE_DIR.rglob("*.pdf")))
+
+    # HWP/HWPX — config 의 hwp_mcp_enabled 토글이 ON 일 때만 수집한다.
+    # 검색 위치: BASE_DIR(프로젝트 루트) + cfg.hwp_dir(있다면).
+    hwp_files: list[Path] = []
+    try:
+        from pipeline.config_store import load_config
+        cfg = load_config()
+        if cfg.hwp_mcp_enabled:
+            roots: list[Path] = [BASE_DIR]
+            if cfg.hwp_dir:
+                extra = Path(cfg.hwp_dir).expanduser()
+                if extra.exists() and extra.resolve() != BASE_DIR.resolve():
+                    roots.append(extra)
+            seen: set[Path] = set()
+            for root in roots:
+                for ext in _HWP_EXTS:
+                    for p in sorted(root.rglob(f"*{ext}")):
+                        rp = p.resolve()
+                        if rp not in seen:
+                            seen.add(rp)
+                            hwp_files.append(p)
+            hwp_files = _filter(hwp_files)
+    except Exception as e:
+        print(f"  [경고] HWP 수집 단계 실패 (무시하고 PDF만 진행): {e}")
+        hwp_files = []
+
+    all_files = pdf_files + hwp_files
 
     done = load_done()
-    pending = [p for p in pdf_files if force or str(p) not in done]
+    pending = [p for p in all_files if force or str(p) not in done]
 
-    print(f"전체 PDF: {len(pdf_files)}개  |  완료: {len(done)}개  |  대기: {len(pending)}개")
+    print(
+        f"전체 PDF: {len(pdf_files)}개  |  HWP: {len(hwp_files)}개  |  "
+        f"완료: {len(done)}개  |  대기: {len(pending)}개"
+    )
     if force:
         print("  ※ --force 모드: 완료 파일 포함 전체 재인덱싱\n")
     else:
@@ -182,16 +229,20 @@ def main() -> None:
         return
 
     ok = fail = skip = 0
-    for i, pdf in enumerate(pending, 1):
-        rel = pdf.relative_to(BASE_DIR)
+    for i, fp in enumerate(pending, 1):
+        try:
+            rel = fp.relative_to(BASE_DIR)
+        except ValueError:
+            # cfg.hwp_dir 가 BASE_DIR 바깥인 경우 절대 경로 그대로 표시
+            rel = fp
         print(f"\n[{i}/{len(pending)}] {rel}")
         print("-" * 60)
 
-        success = ingest_one(pdf)
+        success = ingest_one(fp)
         if success:
             ok += 1
-            if str(pdf) not in done:  # force 재실행 시 중복 기록 방지
-                mark_done(pdf)
+            if str(fp) not in done:  # force 재실행 시 중복 기록 방지
+                mark_done(fp)
         else:
             fail += 1
 

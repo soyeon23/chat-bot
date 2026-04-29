@@ -30,6 +30,25 @@ data/metadata/
 data/md/
 data/audit_log.jsonl
 data/ingest_done.txt
+data/ingest_done.txt.bak
+data/qdrant_storage/
+
+# 사용자 환경설정 (OC 키 등 민감 정보 포함) — 템플릿은 config.example.json
+data/config.json
+
+# 평가 baseline (선택적 커밋 — 회귀 비교 anchor)
+data/eval_baseline.json
+
+# 원본 PDF/HWP 자료 (용량 큼, 정부 공개 자료라 따로 다운로드)
+[본권]*.pdf
+*매뉴얼*.pdf
+국가연구개발혁신법(법률)*.hwp
+
+# Phase G/H audit 임시 캐시
+.planning/audit-cache/
+
+# Claude Code 로컬 세팅 (개인 머신 한정)
+.claude/settings.local.json
 
 # 임시 디버그 파일
 *.txt

@@ -15,12 +15,14 @@ import sys
 from dotenv import load_dotenv
 
 from pipeline.answerer import generate_answer
+from pipeline.auth import auth_status_label, get_auth_source
 from pipeline.embedder import embed_query
-from pipeline.retriever import search_chunks
+from pipeline.query_analyzer import analyze_query
+from pipeline.retriever import search_chunks_smart
 
 load_dotenv()
 
-_TOP_K = int(os.getenv("TOP_K", "5"))
+_TOP_K = int(os.getenv("TOP_K", "8"))
 
 _NO_RESULT_RESPONSE = {
     "verdict": "판단불가",
@@ -75,11 +77,27 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # 시작 시 Claude Code 로그인 상태 확인
+    try:
+        get_auth_source()
+        print(f"[인증] {auth_status_label()}", file=sys.stderr)
+    except RuntimeError as e:
+        print(f"[인증 실패]\n{e}", file=sys.stderr)
+        sys.exit(1)
+
     print(f"[1/4] 임베딩 생성 중: {args.query!r}", file=sys.stderr)
     query_vector = embed_query(args.query)
 
+    print("[2a/4] 질의 의도 분석 중 (Claude)…", file=sys.stderr)
+    hints = analyze_query(args.query)
+    print(f"  → kind={hints.kind}  pages={hints.target_pages}  "
+          f"articles={hints.article_nos}  doc_hint={hints.doc_name_hint!r}",
+          file=sys.stderr)
+
     print(f"[2/4] Qdrant 검색 중 (top_k={_TOP_K}, doc_type={args.doc_type})", file=sys.stderr)
-    qdrant_chunks = search_chunks(query_vector, top_k=_TOP_K, doc_type=args.doc_type)
+    qdrant_chunks = search_chunks_smart(
+        args.query, query_vector, top_k=_TOP_K, doc_type=args.doc_type, hints=hints,
+    )
     normalized_qdrant = [_normalize_chunk(c) for c in qdrant_chunks]
 
     # korean-law MCP로 공식 법령 보완 (--no-mcp 플래그 없을 때)
@@ -110,7 +128,7 @@ def main() -> None:
 
     src_summary = f"Qdrant {len(normalized_qdrant)}개 + MCP {len(mcp_chunks)}개 + 웹 {len(web_chunks)}개"
     print(f"[4/4] Claude 답변 생성 중 (근거 {src_summary})", file=sys.stderr)
-    result = generate_answer(args.query, all_chunks)
+    result = generate_answer(args.query, all_chunks, kind=hints.kind)
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

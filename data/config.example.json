@@ -1,0 +1,12 @@
+{
+  "pdf_dir": ".",
+  "hwp_dir": "",
+  "korean_law_mcp_url": "https://korean-law-mcp.fly.dev/mcp",
+  "korean_law_oc": "",
+  "hwp_mcp_enabled": true,
+  "onboarding_completed": false,
+  "last_index_count": 0,
+  "claude_model": "",
+  "enable_comparison_escalate": true,
+  "auto_sync_on_start": false
+}

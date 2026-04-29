@@ -18,15 +18,38 @@ from mcp.client.streamable_http import streamablehttp_client
 
 load_dotenv()
 
-_MCP_BASE = os.getenv("KOREAN_LAW_MCP_URL", "https://korean-law-mcp.fly.dev/mcp")
-_OC = os.getenv("KOREAN_LAW_OC", "")
-
 # 한 세션에서 처리할 최대 법령 수
 _MAX_LAWS_PER_SESSION = 3
 
 
+def _get_mcp_base() -> str:
+    """런타임 MCP URL 결정. config.json > env > 기본 URL."""
+    try:
+        from pipeline.config_store import load_config
+        cfg = load_config()
+        if cfg.korean_law_mcp_url:
+            return cfg.korean_law_mcp_url
+    except Exception:
+        pass
+    return os.getenv("KOREAN_LAW_MCP_URL", "https://korean-law-mcp.fly.dev/mcp")
+
+
+def _get_oc() -> str:
+    """런타임 OC 결정. config.json > env > 빈 문자열."""
+    try:
+        from pipeline.config_store import load_config
+        cfg = load_config()
+        if cfg.korean_law_oc:
+            return cfg.korean_law_oc
+    except Exception:
+        pass
+    return os.getenv("KOREAN_LAW_OC", "")
+
+
 def _build_url() -> str:
-    return f"{_MCP_BASE}?oc={_OC}" if _OC else _MCP_BASE
+    base = _get_mcp_base()
+    oc = _get_oc()
+    return f"{base}?oc={oc}" if oc else base
 
 
 # ---------------------------------------------------------------------------
@@ -118,8 +141,15 @@ async def _batch_fetch_law_text_async(queries: list[str], question: str = "") ->
 
 def search_law(query: str) -> str:
     """법령명·키워드로 법령 검색. 결과 문자열 반환."""
+    from pipeline.mcp_sync import call_with_fallback, MCPDisabledError
     try:
-        return asyncio.run(_call_tool_async("search_law", {"query": query}))
+        return call_with_fallback(
+            "korean-law-mcp",
+            lambda: asyncio.run(_call_tool_async("search_law", {"query": query})),
+        )
+    except MCPDisabledError as exc:
+        print(f"  [korean-law] 채널 비활성: {exc}")
+        return ""
     except Exception as exc:
         print(f"  [korean-law] search_law 오류: {exc}")
         return ""
@@ -127,11 +157,18 @@ def search_law(query: str) -> str:
 
 def get_law_text(law_name: str, article_no: Optional[str] = None) -> str:
     """법령 조문 전문 조회."""
+    from pipeline.mcp_sync import call_with_fallback, MCPDisabledError
     args: dict = {"law_name": law_name}
     if article_no:
         args["jo"] = article_no
     try:
-        return asyncio.run(_call_tool_async("get_law_text", args))
+        return call_with_fallback(
+            "korean-law-mcp",
+            lambda: asyncio.run(_call_tool_async("get_law_text", args)),
+        )
+    except MCPDisabledError as exc:
+        print(f"  [korean-law] 채널 비활성: {exc}")
+        return ""
     except Exception as exc:
         print(f"  [korean-law] get_law_text 오류: {exc}")
         return ""
@@ -139,8 +176,15 @@ def get_law_text(law_name: str, article_no: Optional[str] = None) -> str:
 
 def get_annexes(law_name: str) -> str:
     """별표·서식 조회."""
+    from pipeline.mcp_sync import call_with_fallback, MCPDisabledError
     try:
-        return asyncio.run(_call_tool_async("get_annexes", {"law_name": law_name}))
+        return call_with_fallback(
+            "korean-law-mcp",
+            lambda: asyncio.run(_call_tool_async("get_annexes", {"law_name": law_name})),
+        )
+    except MCPDisabledError as exc:
+        print(f"  [korean-law] 채널 비활성: {exc}")
+        return ""
     except Exception as exc:
         print(f"  [korean-law] get_annexes 오류: {exc}")
         return ""
@@ -214,8 +258,15 @@ def fetch_law_chunks_from_mcp(
 
     print(f"  [korean-law] 법령 검색 대상: {queries}")
 
+    from pipeline.mcp_sync import call_with_fallback, MCPDisabledError
     try:
-        raw_results = asyncio.run(_batch_fetch_law_text_async(queries, question))
+        raw_results = call_with_fallback(
+            "korean-law-mcp",
+            lambda: asyncio.run(_batch_fetch_law_text_async(queries, question)),
+        )
+    except MCPDisabledError as exc:
+        print(f"  [korean-law] 채널 비활성: {exc}")
+        return []
     except Exception as exc:
         print(f"  [korean-law] 배치 검색 실패: {exc}")
         return []

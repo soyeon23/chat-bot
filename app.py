@@ -26,10 +26,48 @@ from ui.components import render_answer_card, render_quick_prompts
 st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 
 # ──────────────────────────────────────────────────────────────────
+# 온보딩 위저드 라우팅
+# 최초 실행 시 자동 환경 검사 페이지로 보냄.
+# ──────────────────────────────────────────────────────────────────
+from pipeline.config_store import load_config
+
+_cfg_on_start = load_config()
+if not _cfg_on_start.onboarding_completed:
+    st.switch_page("pages/00_⚙️_환경설정.py")
+
+# 자동 동기화 (auto_sync_on_start) — 세션당 한 번만, 변경 없으면 0초.
+# 변경이 발견되면 사이드바 알림으로 안내만 하고 실 인덱싱은 사용자 클릭 후.
+if _cfg_on_start.auto_sync_on_start and not st.session_state.get("_auto_sync_done"):
+    try:
+        from pipeline.sync import (
+            METADATA_PATH,
+            init_metadata_from_qdrant,
+            scan_changes,
+            _resolve_default_roots,
+        )
+        roots = _resolve_default_roots()
+        if not METADATA_PATH.exists():
+            init_metadata_from_qdrant(roots=roots)
+        _auto_changes = scan_changes(roots=roots)
+        n_pending = (
+            len(_auto_changes["added"]) + len(_auto_changes["modified"])
+            + len(_auto_changes["deleted"]) + len(_auto_changes["stale_code"])
+        )
+        if n_pending > 0:
+            st.sidebar.warning(
+                f"📂 동기화 대기 {n_pending}개 — 환경설정에서 실행하세요."
+            )
+        st.session_state["_auto_sync_done"] = True
+    except Exception as e:  # noqa: BLE001
+        # 자동 sync 실패는 챗봇 자체에 영향 주지 말고 조용히 로깅
+        st.session_state["_auto_sync_done"] = True
+        st.session_state["_auto_sync_error"] = f"{type(e).__name__}: {e}"
+
+# ──────────────────────────────────────────────────────────────────
 # 상수
 # ──────────────────────────────────────────────────────────────────
 
-_TOP_K = int(os.getenv("TOP_K", "5"))
+_TOP_K = int(os.getenv("TOP_K", "8"))
 _AUDIT_LOG = Path("data/audit_log.jsonl")
 
 _NO_RESULT = {
@@ -66,24 +104,133 @@ def _normalize(chunk: dict) -> dict:
     }
 
 
+def _compute_confidence(qdrant_chunks: list[dict]) -> tuple[float | None, list[str]]:
+    """Qdrant 청크 목록에서 벡터 유사도 기반 신뢰도와 부스트 신호 라벨을 산출한다.
+
+    retriever.py 의 부스트 로직 특성:
+    - 순수 벡터 코사인 점수: 통상 0.55~0.85 (≤ 1.0)
+    - page lookup 부스트: 0.5 + 1.0 = 1.5 (≥ 1.0)
+    - 구조적 매칭 부스트: vec + 0.50 (≥ 1.0 가능)
+    - kw_and 부스트: vec + 0.25 (보통 ≤ 1.0)
+    - phrase 부스트: vec + 0.35 (일부 1.0 초과 가능)
+
+    threshold 1.0 을 기준으로:
+    - score < 1.0  → 벡터 주도 청크 (vec_confidence 산정에 포함)
+    - score ≥ 1.0 → 부스트 주도 청크 (벡터 신뢰도 산정 제외)
+
+    Returns:
+        (confidence_pct, signal_labels)
+        confidence_pct: 벡터 청크가 있으면 그 평균 score * 100,
+                        없으면 None (부스트/키워드 매칭만 존재함을 의미)
+        signal_labels: UI 표시용 부스트 신호 라벨 리스트
+    """
+    if not qdrant_chunks:
+        return None, []
+
+    # 점수 기반 분류
+    _PAGE_BOOST_THRESHOLD = 1.3   # page lookup(1.5)은 항상 이 이상
+    _STRUCTURAL_THRESHOLD = 1.0   # structural boost(0.5+0.5=1.0) 경계
+
+    vec_scores: list[float] = []
+    has_page_boost = False
+    has_structural_boost = False
+    has_phrase_boost = False
+
+    for c in qdrant_chunks:
+        score = c.get("score", 0.0)
+        if score >= _PAGE_BOOST_THRESHOLD:
+            has_page_boost = True
+        elif score >= _STRUCTURAL_THRESHOLD:
+            has_structural_boost = True
+        else:
+            # score < 1.0: 순수 벡터 또는 소형 부스트 포함 — 벡터 주도로 간주
+            vec_scores.append(score)
+            # kw_and(+0.25) / phrase(+0.35) 부스트 감지 — 0.75 초과 + 비교적 고점
+            if score > 0.75:
+                has_phrase_boost = True
+
+    # 벡터 주도 청크의 평균 score → confidence %
+    if vec_scores:
+        avg = sum(vec_scores) / len(vec_scores)
+        # 작은 부스트가 섞여 있을 수 있으므로 최대 95% 로 캡
+        confidence_pct: float | None = min(avg * 100, 95.0)
+    else:
+        confidence_pct = None  # 부스트 전용
+
+    # 신호 라벨 구성
+    signals: list[str] = []
+    if has_page_boost:
+        signals.append("page")
+    if has_structural_boost:
+        signals.append("structural")
+    if has_phrase_boost and not has_page_boost and not has_structural_boost:
+        signals.append("phrase")
+
+    return confidence_pct, signals
+
+
+def _estimate_tokens(text: str) -> int:
+    """텍스트의 근사 토큰 수를 반환한다.
+
+    한국어 문자: 1글자 ≈ 1토큰 (cl100k/claude tokenizer 기준).
+    ASCII 공백/구두점 등 영문 토큰: 평균 4자 ≈ 1토큰.
+    혼합 텍스트의 실용적 근사: 전체 글자 수를 1.0 으로 나눈 값.
+    (과추정이지만 운영 가시성 목적에는 충분히 보수적.)
+    """
+    return len(text)
+
+
 def run_pipeline(
     question: str,
     doc_type_filter: str | None,
     use_mcp: bool,
     use_web: bool,
-) -> tuple[dict, float, bool]:
-    """질문 → (AnswerPayload dict, confidence %, web_used)."""
-    from pipeline.retriever import search_chunks
-    from pipeline.answerer import generate_answer
+    prior_turns: list[dict] | None = None,
+) -> tuple[dict, float, bool, dict]:
+    """질문 → (AnswerPayload dict, confidence %, web_used, ctx_stats).
+
+    Args:
+        prior_turns: 직전 대화 턴 (UI session_state.messages 의 마지막 N개).
+                     analyzer 가 후속 질문에서 페이지·문서 컨텍스트를 이어받기 위함.
+
+    Returns:
+        result: AnswerPayload dict
+        confidence: 벡터 유사도 평균 (0~95). None 이면 UI 에서 N/A 표시.
+        web_used: 법제처 공식 API 사용 여부
+        ctx_stats: 컨텍스트 사용량 통계 dict
+                   {"n_chunks": int, "n_chars": int, "n_tokens": int,
+                    "limit_tokens": int, "signals": list[str]}
+    """
+    from pipeline.retriever import search_chunks_smart
+    from pipeline.answerer import generate_answer, build_context
+    from pipeline.query_analyzer import analyze_query
 
     embedder = _load_embedder()
     vec = embedder.embed_query(question)
 
-    qdrant_chunks = search_chunks(vec, top_k=_TOP_K, doc_type=doc_type_filter)
-    confidence = (
-        sum(c["score"] for c in qdrant_chunks) / len(qdrant_chunks) * 100
-        if qdrant_chunks else 0.0
+    # Claude 기반 의도 분석 — 페이지·문서·조문·비교 의도를 자유 표현에서 추출.
+    # 직전 대화가 있으면 컨텍스트로 함께 넘긴다 (후속 질문 라우팅).
+    # 실패 시 정규식 fallback (analyze_query 내부에서 처리).
+    hints = analyze_query(question, prior_turns=prior_turns)
+
+    # 일상 대화로 분류된 경우 — retrieval/answerer 모두 스킵하고 분석기의 즉답을 그대로 사용.
+    if hints.kind == "chat" and hints.chat_response:
+        chat_payload = {
+            "kind": "chat",
+            "summary": hints.chat_response,
+        }
+        _empty_ctx: dict = {"n_chunks": 0, "n_chars": 0, "n_tokens": 0,
+                            "limit_tokens": 200_000, "signals": []}
+        return chat_payload, 0.0, False, _empty_ctx
+
+    qdrant_chunks = search_chunks_smart(
+        question, vec, top_k=_TOP_K, doc_type=doc_type_filter, hints=hints,
     )
+
+    # 벡터 유사도 기반 confidence 재산출 (부스트 청크 분리)
+    confidence_raw, boost_signals = _compute_confidence(qdrant_chunks)
+    # None → 0.0 으로 표시 (UI 에서 signals 로 구분)
+    confidence = confidence_raw if confidence_raw is not None else 0.0
 
     normalized = [_normalize(c) for c in qdrant_chunks]
 
@@ -107,10 +254,42 @@ def run_pipeline(
                 normalized += official_chunks
                 web_used = True
 
-    if not normalized:
-        return _NO_RESULT, 0.0, False
+    # Phase H — page_lookup / article_lookup 경로는 retrieval 이 비어도
+    # Claude 가 도구로 PDF 를 직접 읽어 답할 수 있다. 빈 chunks 로는
+    # generate_answer 가 ValueError 를 던지므로 stub 1개를 넣어 도구 모드로
+    # 진입시킨다. 도구가 모두 실패하면 모델이 verdict=판단불가 로 응답한다.
+    if not normalized and hints.kind in {"page_lookup", "article_lookup"}:
+        normalized = [{
+            "doc_name": hints.doc_name_hint or "",
+            "doc_type": "",
+            "article_no": "",
+            "article_title": "",
+            "page": (hints.target_pages[0] if hints.target_pages else 0),
+            "text": (
+                "(검색된 근거 없음 — 사용자가 요청한 페이지/조문을 mcp__local_doc__* "
+                "도구로 직접 조회하세요.)"
+            ),
+        }]
 
-    return generate_answer(question, normalized), confidence, web_used
+    if not normalized:
+        _empty_ctx2: dict = {"n_chunks": 0, "n_chars": 0, "n_tokens": 0,
+                             "limit_tokens": 200_000, "signals": boost_signals}
+        return _NO_RESULT, 0.0, False, _empty_ctx2
+
+    # 컨텍스트 사용량 산출 — build_context 와 동일한 포맷으로 추정
+    ctx_text = build_context(normalized)
+    ctx_chars = len(ctx_text)
+    ctx_tokens = _estimate_tokens(ctx_text)
+    _MODEL_LIMIT = 200_000  # Sonnet 4.6 컨텍스트 한도 (토큰)
+    ctx_stats: dict = {
+        "n_chunks": len(normalized),
+        "n_chars": ctx_chars,
+        "n_tokens": ctx_tokens,
+        "limit_tokens": _MODEL_LIMIT,
+        "signals": boost_signals,
+    }
+
+    return generate_answer(question, normalized, kind=hints.kind), confidence, web_used, ctx_stats
 
 
 def _ingest_file(uploaded_file, doc_name: str, doc_type: str) -> None:
@@ -146,17 +325,32 @@ def _ingest_file(uploaded_file, doc_name: str, doc_type: str) -> None:
         status.update(label=f"✅ 인덱싱 완료 — {n}개 포인트 적재", state="complete")
 
 
-def _save_audit(question: str, result: dict, confidence: float, use_mcp: bool, web_used: bool = False) -> None:
+def _save_audit(
+    question: str,
+    result: dict,
+    confidence: float,
+    use_mcp: bool,
+    web_used: bool = False,
+    started_at: datetime | None = None,
+    ended_at: datetime | None = None,
+) -> None:
     _AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
+    end = ended_at or datetime.now()
+    start = started_at or end
+    duration_sec = round((end - start).total_seconds(), 2)
     entry = {
-        "timestamp":      datetime.now().isoformat(timespec="seconds"),
-        "question":       question,
-        "verdict":        result.get("verdict", ""),
-        "confidence":     round(confidence, 1),
+        # 호환성: 기존 필드명 timestamp는 종료 시각으로 유지.
+        "timestamp":       end.isoformat(timespec="seconds"),
+        "started_at":      start.isoformat(timespec="seconds"),
+        "ended_at":        end.isoformat(timespec="seconds"),
+        "duration_sec":    duration_sec,
+        "question":        question,
+        "verdict":         result.get("verdict", ""),
+        "confidence":      round(confidence, 1),
         "citations_count": len(result.get("citations", [])),
-        "follow_up":      result.get("follow_up_needed", False),
-        "mcp_used":       use_mcp,
-        "web_used":       web_used,
+        "follow_up":       result.get("follow_up_needed", False),
+        "mcp_used":        use_mcp,
+        "web_used":        web_used,
     }
     with open(_AUDIT_LOG, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -186,6 +380,37 @@ with st.sidebar:
     if st.button("🗑️ 새 분석 시작", use_container_width=True):
         st.session_state.messages = []
         st.session_state.pending_question = None
+        st.rerun()
+
+    if st.button("⚙️ 환경/경로 설정", use_container_width=True):
+        st.switch_page("pages/00_⚙️_환경설정.py")
+
+    st.divider()
+
+    # 모델 선택 (rate limit 즉시 회피용)
+    from pipeline.answerer import get_model
+    from pipeline.config_store import load_config as _load_cfg, update_config as _update_cfg
+
+    _MODELS = {
+        "Haiku 4.5 (가벼움 · 빠름 · rate limit 여유)": "claude-haiku-4-5-20251001",
+        "Sonnet 4.5 (균형)": "claude-sonnet-4-5",
+        "Opus 4.7 (최고 품질 · 한도 빨리 소진)": "claude-opus-4-7",
+    }
+    _MODEL_LABELS = list(_MODELS.keys())
+    _current_model = get_model()
+    try:
+        _current_idx = list(_MODELS.values()).index(_current_model)
+    except ValueError:
+        _current_idx = 1  # default to Sonnet
+    sel_label = st.selectbox(
+        "Claude 모델",
+        _MODEL_LABELS,
+        index=_current_idx,
+        help="429 자주 뜨면 Haiku로 변경. 변경 즉시 적용 (재시작 불필요).",
+    )
+    sel_model = _MODELS[sel_label]
+    if sel_model != _current_model:
+        _update_cfg(claude_model=sel_model)
         st.rerun()
 
     st.divider()
@@ -256,6 +481,22 @@ with st.sidebar:
     except Exception:
         pass
 
+    # Claude Code 인증 상태 표시
+    try:
+        from pipeline.auth import auth_status_label, get_auth_source
+        get_auth_source()
+        st.markdown(
+            f'<div style="color:#22c55e;font-size:12px;margin-top:4px;">'
+            f'🔐 인증: {auth_status_label()}</div>',
+            unsafe_allow_html=True,
+        )
+    except RuntimeError:
+        st.markdown(
+            '<div style="color:#ef4444;font-size:12px;margin-top:4px;">'
+            '🔐 인증 미설정 — `claude` CLI 로그인 필요</div>',
+            unsafe_allow_html=True,
+        )
+
 
 # ──────────────────────────────────────────────────────────────────
 # 메인 영역
@@ -273,7 +514,15 @@ st.markdown(
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         if msg["role"] == "assistant":
-            render_answer_card(msg["result"], msg.get("confidence", 0.0))
+            res = msg["result"]
+            if isinstance(res, dict) and res.get("kind") == "chat":
+                st.markdown(res.get("summary", ""))
+            else:
+                render_answer_card(
+                    res,
+                    msg.get("confidence", 0.0),
+                    ctx_stats=msg.get("ctx_stats"),
+                )
         else:
             st.markdown(msg["content"])
 
@@ -297,26 +546,117 @@ elif chat_input:
     question = chat_input
 
 if question:
+    # 분석기에 넘길 직전 대화 — 사용자 메시지 append 전에 캡처해야 한다
+    # (현재 질문이 prior_turns 에 들어가면 안 됨).
+    # 메시지 스키마:
+    #   user      → {"role":"user", "content": str}
+    #   assistant → {"role":"assistant", "result": dict, "confidence": float}
+    prior_turns_for_analyzer: list[dict] = []
+    for msg in st.session_state.messages[-3:]:
+        role = msg.get("role")
+        if role == "user":
+            text = msg.get("content")
+        elif role == "assistant":
+            res = msg.get("result") or {}
+            text = str(res.get("summary", ""))
+        else:
+            continue
+        if not isinstance(text, str) or not text.strip():
+            continue
+        prior_turns_for_analyzer.append({"role": role, "content": text[:1000]})
+
     # 사용자 메시지
     st.session_state.messages.append({"role": "user", "content": question})
     with st.chat_message("user"):
         st.markdown(question)
 
-    # 답변 생성
-    with st.chat_message("assistant"):
-        with st.spinner("근거 검색 및 답변 생성 중..."):
-            try:
-                result, confidence, web_used = run_pipeline(question, doc_type_filter, use_mcp, use_web)
-            except Exception as exc:
-                st.error(f"답변 생성 오류: {exc}")
-                st.stop()
+    # 답변 생성 — 취소 버튼 + 백그라운드 워커
+    import threading
 
-        if web_used:
-            st.caption("📋 법제처 공식 API(법령·판례·행정규칙) 결과가 보완 근거로 사용되었습니다.")
-        render_answer_card(result, confidence)
+    from pipeline.answerer import RateLimitError
+
+    started_at = datetime.now()
+    cancel_event = threading.Event()
+    result_holder: dict = {}
+
+    def _worker():
+        try:
+            result_holder["value"] = run_pipeline(
+                question, doc_type_filter, use_mcp, use_web,
+                prior_turns=prior_turns_for_analyzer,
+            )
+        except RateLimitError as exc:
+            result_holder["rate_limit"] = str(exc)
+        except Exception as exc:  # noqa: BLE001
+            result_holder["error"] = f"{type(exc).__name__}: {exc}"
+
+
+    with st.chat_message("assistant"):
+        spinner_box = st.empty()
+        cancel_box = st.empty()
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
+
+        with spinner_box.container():
+            st.markdown(
+                '<div style="color:#94a3b8;font-size:13px;">'
+                '🔍 근거 검색 및 답변 생성 중...</div>',
+                unsafe_allow_html=True,
+            )
+        if cancel_box.button("⛔ 취소", key=f"cancel_{len(st.session_state.messages)}"):
+            cancel_event.set()
+
+        # 워커 완료 또는 취소까지 폴링
+        while thread.is_alive():
+            if cancel_event.is_set():
+                break
+            thread.join(timeout=0.2)
+
+        spinner_box.empty()
+        cancel_box.empty()
+
+        if cancel_event.is_set() and not result_holder:
+            st.warning("취소되었습니다. (이미 발송된 API 호출은 백그라운드에서 완료될 수 있음)")
+            st.session_state.messages.pop()  # 사용자 메시지 롤백
+            st.stop()
+
+        if "rate_limit" in result_holder:
+            st.error(
+                f"⏳ {result_holder['rate_limit']}\n\n"
+                "Claude Code 구독 사용량 한도에 도달했습니다. "
+                "잠시 후 다시 시도하거나, 다른 모델을 `.env`의 `CLAUDE_MODEL`로 지정해 보세요."
+            )
+            st.session_state.messages.pop()
+            st.stop()
+
+        if "error" in result_holder:
+            st.error(f"답변 생성 오류: {result_holder['error']}")
+            st.session_state.messages.pop()
+            st.stop()
+
+        result, confidence, web_used, ctx_stats = result_holder["value"]
+
+        # 일상 대화는 답변 카드 대신 가벼운 마크다운으로 렌더 (verdict/citations 없음).
+        if isinstance(result, dict) and result.get("kind") == "chat":
+            st.markdown(result.get("summary", ""))
+        else:
+            if web_used:
+                st.caption("📋 법제처 공식 API(법령·판례·행정규칙) 결과가 보완 근거로 사용되었습니다.")
+            render_answer_card(result, confidence, ctx_stats=ctx_stats)
         st.session_state.messages.append({
             "role":       "assistant",
             "result":     result,
             "confidence": confidence,
+            "ctx_stats":  ctx_stats,
         })
-        _save_audit(question, result, confidence, use_mcp, web_used)
+        ended_at = datetime.now()
+        _save_audit(
+            question, result, confidence, use_mcp, web_used,
+            started_at=started_at, ended_at=ended_at,
+        )
+        # UI 하단에 처리 시간 표시 (사용자 가시성)
+        st.caption(
+            f"⏱ {started_at.strftime('%H:%M:%S')} → {ended_at.strftime('%H:%M:%S')} "
+            f"({(ended_at - started_at).total_seconds():.1f}s)"
+        )

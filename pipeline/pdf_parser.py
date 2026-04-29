@@ -4,6 +4,19 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
 
+try:
+    import pytesseract
+    _OCR_AVAILABLE = True
+except ImportError:
+    pytesseract = None  # type: ignore
+    _OCR_AVAILABLE = False
+
+# OCR 결과가 이 글자 수 미만이면 OCR도 실패한 것으로 간주
+_OCR_MIN_CHARS = 30
+# OCR 렌더링 해상도 (DPI). 높을수록 정확하나 느림.
+_OCR_DPI = 300
+_OCR_LANG = "kor+eng"
+
 
 @dataclass
 class ParsedPage:
@@ -80,6 +93,23 @@ def _clean_page_text(lines: list[str]) -> str:
     return "\n".join(lines[start:end]).strip()
 
 
+def _ocr_page(page, page_num: int) -> str:
+    """pdfplumber 페이지를 이미지로 렌더링 후 tesseract로 OCR한다.
+
+    실패/미설치 시 빈 문자열 반환. 글자만 추출하며 사진/도형은 무시된다.
+    """
+    if not _OCR_AVAILABLE:
+        return ""
+    try:
+        page_image = page.to_image(resolution=_OCR_DPI)
+        pil_img = page_image.original  # PIL.Image
+        text = pytesseract.image_to_string(pil_img, lang=_OCR_LANG)
+        return (text or "").strip()
+    except Exception as e:  # tesseract 미설치, 언어팩 부재 등
+        print(f"  [OCR 실패] {page_num}페이지: {type(e).__name__}: {e}")
+        return ""
+
+
 def parse_pdf(pdf_path: str | Path, save_raw: bool = True) -> ParseResult:
     """
     PDF를 페이지 단위로 파싱한다.
@@ -113,8 +143,17 @@ def parse_pdf(pdf_path: str | Path, save_raw: bool = True) -> ParseResult:
 
             needs_ocr = len(cleaned.strip()) < OCR_THRESHOLD
             if needs_ocr:
-                result.ocr_flagged_pages.append(i)
-                print(f"  [경고] {i}페이지 텍스트 부족 ({len(cleaned.strip())}자) - OCR 필요 가능성")
+                ocr_text = _ocr_page(page, i)
+                if len(ocr_text) >= _OCR_MIN_CHARS:
+                    cleaned = ocr_text
+                    needs_ocr = False
+                    print(f"  [OCR] {i}페이지 복구 ({len(ocr_text)}자)")
+                else:
+                    result.ocr_flagged_pages.append(i)
+                    print(
+                        f"  [경고] {i}페이지 텍스트 추출 실패 "
+                        f"(원문 {len(cleaned.strip())}자 / OCR {len(ocr_text)}자) - 이미지/사진 페이지로 추정"
+                    )
 
             result.pages.append(ParsedPage(
                 page_num=i,
