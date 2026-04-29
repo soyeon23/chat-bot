@@ -115,6 +115,12 @@ class QueryHints:
     # kind == "chat" 일 때 분석기가 함께 생성한 즉답 텍스트.
     # 다른 kind 에서는 빈 문자열.
     chat_response: str = ""
+    # 다중 턴 대화에서 *직전 맥락을 흡수한 standalone 검색 질의*.
+    # 예: 직전에 "회의비로 세미나 사용 가능?" 가 있고 현재 질문이 "실제 사례 있어?" 면
+    # rewritten_query="회의비로 세미나 개최한 실제 사례". 첫 질문(prior_turns 없음)이면
+    # 원본 question 과 동일하게 채워진다. retriever 가 임베딩 대상으로 사용한다.
+    # 빈 문자열이면 caller 가 원본 question 으로 폴백.
+    rewritten_query: str = ""
 
     def has_structural(self) -> bool:
         """조문/항/호/별표/별지/절 중 하나라도 추출됐는지."""
@@ -154,6 +160,7 @@ class QueryHints:
             "doc_name_hint": self.doc_name_hint,
             "kind": self.kind,
             "chat_response": self.chat_response,
+            "rewritten_query": self.rewritten_query,
         }
 
 
@@ -310,6 +317,10 @@ def parse_query(question: str) -> QueryHints:
     질의를 파싱해 메타 힌트를 반환.
 
     실패해도 예외를 던지지 않는다. 빈 리스트가 들어 있을 수 있다.
+
+    rewritten_query 는 question 그대로 채워둔다. 정규식 fallback 은 직전 대화
+    문맥을 모르므로 후속 질문이라도 단발 의미만 잡을 수 있고, 그게 retriever
+    임베딩 입력으로 안전한 default.
     """
     if not question:
         return QueryHints()
@@ -325,6 +336,7 @@ def parse_query(question: str) -> QueryHints:
         doc_type_hints=_extract_doc_type_hints(question),
         comparison_intent=_detect_comparison_intent(question),
         target_pages=_extract_pages(question),
+        rewritten_query=question,
     )
 
 

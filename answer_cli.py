@@ -75,7 +75,26 @@ def main() -> None:
         "--web", action="store_true",
         help="Qdrant·MCP에 없는 내용을 법제처 공식 API(법령·판례·행정규칙)로 보완",
     )
+    parser.add_argument(
+        "--prior-json", default=None,
+        help=(
+            "직전 대화 턴 (JSON 배열). 멀티턴 모드 테스트용. "
+            "예: '[{\"role\":\"user\",\"content\":\"회의비 세미나?\"},"
+            "{\"role\":\"assistant\",\"content\":\"가능합니다 — ...\"}]'"
+        ),
+    )
     args = parser.parse_args()
+
+    # 멀티턴: --prior-json 으로 직전 대화 주입 (선택).
+    prior_turns: list[dict] = []
+    if args.prior_json:
+        try:
+            prior_turns = json.loads(args.prior_json)
+            if not isinstance(prior_turns, list):
+                raise ValueError("--prior-json 은 JSON 배열이어야 합니다.")
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"[--prior-json 파싱 실패] {e}", file=sys.stderr)
+            sys.exit(2)
 
     # 시작 시 Claude Code 로그인 상태 확인
     try:
@@ -85,18 +104,26 @@ def main() -> None:
         print(f"[인증 실패]\n{e}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"[1/4] 임베딩 생성 중: {args.query!r}", file=sys.stderr)
-    query_vector = embed_query(args.query)
-
     print("[2a/4] 질의 의도 분석 중 (Claude)…", file=sys.stderr)
-    hints = analyze_query(args.query)
+    hints = analyze_query(args.query, prior_turns=prior_turns or None)
     print(f"  → kind={hints.kind}  pages={hints.target_pages}  "
           f"articles={hints.article_nos}  doc_hint={hints.doc_name_hint!r}",
           file=sys.stderr)
 
+    # 멀티턴: rewritten_query 가 있으면 그것으로 임베딩·검색.
+    search_query = (hints.rewritten_query or "").strip() or args.query
+    if search_query != args.query:
+        print(
+            f"  → rewritten_query={search_query!r} (original={args.query!r})",
+            file=sys.stderr,
+        )
+
+    print(f"[1/4] 임베딩 생성 중: {search_query!r}", file=sys.stderr)
+    query_vector = embed_query(search_query)
+
     print(f"[2/4] Qdrant 검색 중 (top_k={_TOP_K}, doc_type={args.doc_type})", file=sys.stderr)
     qdrant_chunks = search_chunks_smart(
-        args.query, query_vector, top_k=_TOP_K, doc_type=args.doc_type, hints=hints,
+        search_query, query_vector, top_k=_TOP_K, doc_type=args.doc_type, hints=hints,
     )
     normalized_qdrant = [_normalize_chunk(c) for c in qdrant_chunks]
 
@@ -128,7 +155,10 @@ def main() -> None:
 
     src_summary = f"Qdrant {len(normalized_qdrant)}개 + MCP {len(mcp_chunks)}개 + 웹 {len(web_chunks)}개"
     print(f"[4/4] Claude 답변 생성 중 (근거 {src_summary})", file=sys.stderr)
-    result = generate_answer(args.query, all_chunks, kind=hints.kind)
+    result = generate_answer(
+        args.query, all_chunks, kind=hints.kind,
+        prior_turns=prior_turns or None,
+    )
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

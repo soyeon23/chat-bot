@@ -330,6 +330,7 @@ def generate_answer(
     question: str,
     chunks: list[dict],
     kind: str = "open",
+    prior_turns: list[dict] | None = None,
 ) -> dict:
     """검색된 chunks를 근거로 Claude에게 질문하고 AnswerPayload dict를 반환한다.
 
@@ -340,6 +341,11 @@ def generate_answer(
               ("page_lookup" | "article_lookup" | "comparison" | "open").
               page_lookup·article_lookup 인 경우 user 프롬프트에 "본문을 풀어 쓰라"는
               힌트 블록이 추가돼, summary 가 메타 요약 1줄로 끝나는 패턴을 막는다.
+        prior_turns: 직전 N 턴 대화 (멀티턴 대화 모드).
+                     각 항목은 `{"role": "user"|"assistant", "content": str}`.
+                     assistant content 는 *summary 만* 들어 있어야 한다 (citations
+                     없이 — 토큰 절약 + 모델이 이전 답변 요지만 알면 충분).
+                     None 또는 빈 리스트면 단발 호출 (기존 동작과 100% 동일).
 
     Returns:
         AnswerPayload.model_dump() 결과 dict
@@ -359,7 +365,9 @@ def generate_answer(
     from pipeline.prompts import build_user_prompt as _build_user_prompt
     # build_user_prompt 는 chunks에서 doc_name/article_no/page/text 키를 읽으므로
     # chunks가 doc_name 등의 키를 갖고 있어야 한다 (caller 가 정규화 필수).
-    user_prompt = _build_user_prompt(question, chunks, kind=kind)
+    user_prompt = _build_user_prompt(
+        question, chunks, kind=kind, prior_turns=prior_turns,
+    )
 
     # Phase H — 페이지/조문 직접 조회 경로에서는 로컬 PDF 직접 접근 도구를
     # 활성화한다. 도구 사용 가이드는 system_prompt 부록으로 합치고, max_turns
@@ -372,8 +380,10 @@ def generate_answer(
     model = get_model(kind=kind)
     # CLI / Streamlit 모두 stderr 를 보여주므로 어떤 모델로 보냈는지 명확히 남긴다.
     # answer_cli 가 비교형 escalate 가 동작했는지 확인하는 신호.
+    n_prior = len(prior_turns or [])
     print(
-        f"[answerer] model={model} kind={kind} enable_tools={enable_tools}",
+        f"[answerer] model={model} kind={kind} enable_tools={enable_tools} "
+        f"prior_turns={n_prior}",
         file=__import__("sys").stderr,
     )
 

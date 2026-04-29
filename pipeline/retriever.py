@@ -211,14 +211,19 @@ def search_chunks_smart(
     의도 분석(정규식 또는 LLM) prefilter + 벡터 검색 + 페이로드 부스트 결합 검색.
 
     Args:
-        question: 사용자 자연어 질의.
+        question: 사용자 자연어 질의. 멀티턴 모드에서는 caller 가
+            `hints.rewritten_query` (직전 컨텍스트가 흡수된 self-contained 질의) 를
+            여기에 넘겨야 한다. `query_vector` 도 같은 텍스트로 임베딩돼 있어야 일관성 유지.
+            `hints` 가 None 인 경우만 정규식 `parse_query` 폴백에 사용된다.
         query_vector: 임베딩된 질의 벡터.
         top_k: 최종 반환 개수.
         doc_type: 문서 종류 사전 필터.
         debug: True면 각 후보의 부스트 내역을 stderr에 출력.
         hints: 사전 분석된 `QueryHints`. None이면 정규식 `parse_query`로 fallback.
                LLM 분석 결과 (`query_analyzer.analyze_query`)를 넘기면 페이지 직접
-               조회·문서명 한정 등이 추가로 활성화된다.
+               조회·문서명 한정 등이 추가로 활성화된다. `hints.rewritten_query` 가
+               `question` 인자와 다른 경우는 caller 가 의도적으로 멀티턴 rewriting
+               을 적용한 것이므로 그대로 따른다.
 
     Returns:
         기존 search_chunks와 동일한 dict 리스트 (score 키 포함).

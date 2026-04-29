@@ -206,10 +206,9 @@ def run_pipeline(
     from pipeline.query_analyzer import analyze_query
 
     embedder = _load_embedder()
-    vec = embedder.embed_query(question)
 
     # Claude 기반 의도 분석 — 페이지·문서·조문·비교 의도를 자유 표현에서 추출.
-    # 직전 대화가 있으면 컨텍스트로 함께 넘긴다 (후속 질문 라우팅).
+    # 직전 대화가 있으면 컨텍스트로 함께 넘긴다 (후속 질문 라우팅 + rewritten_query).
     # 실패 시 정규식 fallback (analyze_query 내부에서 처리).
     hints = analyze_query(question, prior_turns=prior_turns)
 
@@ -223,8 +222,23 @@ def run_pipeline(
                             "limit_tokens": 200_000, "signals": []}
         return chat_payload, 0.0, False, _empty_ctx
 
+    # 멀티턴: rewritten_query 가 있으면 임베딩·검색 입력을 거기에 맞춘다.
+    # 후속 질문 ("실제 사례 있어?") 도 직전 주제 ("회의비 세미나") 가 흡수된 self-contained
+    # 질의 ("회의비로 세미나 개최한 실제 사례") 로 검색돼 무관 청크 회수를 막는다.
+    # 첫 질문(prior_turns 없음) 또는 LLM 폴백이면 rewritten_query == question 이라
+    # 회귀 영향 0.
+    search_query = (hints.rewritten_query or "").strip() or question
+    if search_query != question:
+        # 멀티턴 디버깅 신호 — 어떻게 다시 작성됐는지 stderr 에 남긴다.
+        print(
+            f"[run_pipeline] rewritten_query={search_query!r} "
+            f"(original={question!r})",
+            file=sys.stderr,
+        )
+    vec = embedder.embed_query(search_query)
+
     qdrant_chunks = search_chunks_smart(
-        question, vec, top_k=_TOP_K, doc_type=doc_type_filter, hints=hints,
+        search_query, vec, top_k=_TOP_K, doc_type=doc_type_filter, hints=hints,
     )
 
     # 벡터 유사도 기반 confidence 재산출 (부스트 청크 분리)
@@ -289,7 +303,14 @@ def run_pipeline(
         "signals": boost_signals,
     }
 
-    return generate_answer(question, normalized, kind=hints.kind), confidence, web_used, ctx_stats
+    return (
+        generate_answer(
+            question, normalized, kind=hints.kind, prior_turns=prior_turns,
+        ),
+        confidence,
+        web_used,
+        ctx_stats,
+    )
 
 
 def _ingest_file(uploaded_file, doc_name: str, doc_type: str) -> None:
