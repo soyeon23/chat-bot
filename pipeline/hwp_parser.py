@@ -78,6 +78,10 @@ def _run_async(coro_factory) -> object:
     fut: Future = Future()
 
     def _worker():
+        # hangul_mcp 0.1.x 의 OLE2 파서가 재귀 깊이 1000 을 쉽게 초과 →
+        # RecursionError 로 *모든* OLE2 HWP 파싱이 실패. recursion limit 은
+        # thread-local 이라 worker 진입 시점에 늘린다 (다른 thread 영향 없음).
+        sys.setrecursionlimit(max(sys.getrecursionlimit(), 20000))
         try:
             result = asyncio.run(coro_factory())
             fut.set_result(result)
