@@ -251,6 +251,7 @@ async def _run_query(
         AssistantMessage,
         ClaudeAgentOptions,
         ResultMessage,
+        StreamEvent,
         TextBlock,
         ToolUseBlock,
         ToolResultBlock,
@@ -266,6 +267,8 @@ async def _run_query(
         except Exception:
             pass
 
+    # include_partial_messages=True 면 SDK 가 streaming 도중 partial AssistantMessage
+        # 를 chunk 단위로 yield → progress_cb 로 흘려 UI 가 토큰을 실시간 누적 표시.
     if enable_tools:
         # Phase H: in-process MCP 서버를 띄워 read_page / get_article / search_text
         # / list_articles / list_documents 를 노출. permission_mode 는
@@ -283,6 +286,7 @@ async def _run_query(
             allowed_tools=TOOL_NAMES,
             permission_mode="bypassPermissions",
             max_turns=8,
+            include_partial_messages=True,
         )
     else:
         options = ClaudeAgentOptions(
@@ -291,6 +295,7 @@ async def _run_query(
             allowed_tools=[],          # 답변 생성에 도구 사용 금지
             permission_mode="bypassPermissions",  # 어차피 도구 비허용이라 prompt 안 뜸
             max_turns=1,
+            include_partial_messages=True,
         )
 
     text_chunks: list[str] = []
@@ -310,6 +315,18 @@ async def _run_query(
 
     try:
         async for msg in query(prompt=user_prompt, options=options):
+            # StreamEvent — Anthropic API 의 partial delta. UI 표시 전용으로 emit
+            # 만 하고 최종 답변 누적엔 사용하지 않음 (final 은 AssistantMessage 가 담당).
+            if isinstance(msg, StreamEvent):
+                ev = msg.event or {}
+                if ev.get("type") == "content_block_delta":
+                    delta = ev.get("delta") or {}
+                    if delta.get("type") == "text_delta":
+                        text = delta.get("text") or ""
+                        if text:
+                            _emit({"type": "text_delta", "text": text})
+                continue
+
             if isinstance(msg, AssistantMessage):
                 # SDK 가 assistant 의 error 필드에 'rate_limit' 등 문자열을 채워 주기도 함
                 if msg.error == "rate_limit":

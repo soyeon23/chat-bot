@@ -68,6 +68,21 @@ class CacheEntry:
     ctx_stats: dict
 
 
+def _hash_prior_turns(prior_turns: Optional[list]) -> str:
+    """멀티턴 직전 대화의 안정적 해시. 빈 입력은 빈 문자열."""
+    if not prior_turns:
+        return ""
+    try:
+        # role + content 만 추출 — citations 등 메타는 캐시 키에서 제외.
+        canon = json.dumps(
+            [{"r": t.get("role", ""), "c": t.get("content", "")} for t in prior_turns],
+            ensure_ascii=False, sort_keys=True,
+        )
+    except Exception:
+        return ""
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:16]
+
+
 def _cache_key(
     *,
     query: str,
@@ -75,8 +90,9 @@ def _cache_key(
     use_mcp: bool,
     use_web: bool,
     claude_model: str,
+    prior_turns: Optional[list] = None,
 ) -> tuple[str, str]:
-    """질의 + 옵션 조합의 해시 키.
+    """질의 + 옵션 + (멀티턴 시) 직전 대화 해시 조합의 캐시 키.
 
     Returns:
         (sha_hex, key_repr) — 파일명용 해시 + 디버그용 원본 표현
@@ -87,6 +103,7 @@ def _cache_key(
         f"mcp={int(bool(use_mcp))}",
         f"web={int(bool(use_web))}",
         f"model={claude_model or ''}",
+        f"pt={_hash_prior_turns(prior_turns)}",
     ]
     repr_str = "|".join(parts)
     sha = hashlib.sha256(repr_str.encode("utf-8")).hexdigest()
@@ -100,11 +117,11 @@ def get(
     use_mcp: bool,
     use_web: bool,
     claude_model: str,
+    prior_turns: Optional[list] = None,
 ) -> Optional[CacheEntry]:
     """캐시 조회. 미스 시 None.
 
-    멀티턴 호출 (prior_turns 가 비어있지 않은 경우) 은 caller 에서 호출 자체를
-    스킵해야 한다 — 이 함수는 스킵 책임을 갖지 않음.
+    멀티턴도 적중 가능 — 같은 질의 + 같은 직전 대화 해시 조합이면 hit.
     """
     if os.getenv("DISABLE_ANSWER_CACHE") == "1":
         return None
@@ -116,6 +133,7 @@ def get(
         use_mcp=use_mcp,
         use_web=use_web,
         claude_model=claude_model,
+        prior_turns=prior_turns,
     )
     path = _CACHE_DIR / f"{sha}.json"
     if not path.exists():
@@ -141,6 +159,7 @@ def put(
     use_web: bool,
     claude_model: str,
     entry: CacheEntry,
+    prior_turns: Optional[list] = None,
 ) -> None:
     """캐시 저장. 실패는 조용히 (캐시는 best-effort)."""
     if os.getenv("DISABLE_ANSWER_CACHE") == "1":
@@ -153,6 +172,7 @@ def put(
         use_mcp=use_mcp,
         use_web=use_web,
         claude_model=claude_model,
+        prior_turns=prior_turns,
     )
     path = _CACHE_DIR / f"{sha}.json"
     payload = {

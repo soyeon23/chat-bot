@@ -279,38 +279,59 @@ def run_pipeline(
             file=sys.stderr,
         )
 
-    # 답변 캐시 — 단발 질의 (prior_turns 빔) 만 적용. rewritten_query 가 self-contained
-    # 라 같은 의도의 재요청을 정확히 잡아낸다. 멀티턴은 컨텍스트마다 답이 달라
-    # 키 폭발 + hit-rate 미미 → 스킵.
+    # 답변 캐시 — 단발/멀티턴 모두 적용. 멀티턴은 prior_turns 해시까지 키에
+    # 포함해 같은 컨텍스트일 때만 적중 (다음 페이지 후속처럼 직전 답변이 달라
+    # 컨텍스트도 달라지면 자연스럽게 miss → key 폭발 위험은 동일 컨텍스트
+    # 반복 시에만 hit 으로 제한됨).
     cache_key_args = dict(
         query=search_query,
         doc_type_filter=doc_type_filter,
         use_mcp=use_mcp,
         use_web=use_web,
         claude_model=get_model(kind=hints.kind),
+        prior_turns=prior_turns,
     )
-    if not (prior_turns or []):
-        cached = answer_cache.get(**cache_key_args)
-        if cached is not None:
-            print(f"[run_pipeline] 캐시 HIT — query={search_query!r}", file=sys.stderr)
-            _stage("캐시 적중")
-            return (cached.result, cached.confidence, cached.web_used, cached.ctx_stats)
+    cached = answer_cache.get(**cache_key_args)
+    if cached is not None:
+        print(f"[run_pipeline] 캐시 HIT — query={search_query!r}", file=sys.stderr)
+        _stage("캐시 적중")
+        return (cached.result, cached.confidence, cached.web_used, cached.ctx_stats)
 
-    _stage("문서 검색")
-    vec = embedder.embed_query(search_query)
-
-    qdrant_chunks = search_chunks_smart(
-        search_query, vec, top_k=_TOP_K, doc_type=doc_type_filter, hints=hints,
+    # page_lookup retrieval 스킵 — 사용자가 페이지를 명시한 경우 (예: "151p")
+    # Qdrant 검색 자체가 불필요. doc 추정도 hints 가 채워둠 → 도구 모드로 직행.
+    skip_retrieval = (
+        hints.kind == "page_lookup"
+        and bool(hints.target_pages)
     )
 
-    # 벡터 유사도 기반 confidence 재산출 (부스트 청크 분리)
-    confidence_raw, boost_signals = _compute_confidence(qdrant_chunks)
-    # None → 0.0 으로 표시 (UI 에서 signals 로 구분)
-    confidence = confidence_raw if confidence_raw is not None else 0.0
+    if skip_retrieval:
+        _stage("페이지 직접 조회")
+        qdrant_chunks = []
+        confidence = 0.0
+        boost_signals = ["page_lookup_skip_retrieval"]
+        normalized = []
+        print(
+            f"[run_pipeline] retrieval 스킵 — kind={hints.kind} "
+            f"target_pages={hints.target_pages} doc_hint={hints.doc_name_hint!r}",
+            file=sys.stderr,
+        )
+    else:
+        _stage("문서 검색")
+        vec = embedder.embed_query(search_query)
 
-    normalized = [_normalize(c) for c in qdrant_chunks]
+        qdrant_chunks = search_chunks_smart(
+            search_query, vec, top_k=_TOP_K, doc_type=doc_type_filter, hints=hints,
+        )
 
-    if use_mcp:
+        # 벡터 유사도 기반 confidence 재산출 (부스트 청크 분리)
+        confidence_raw, boost_signals = _compute_confidence(qdrant_chunks)
+        # None → 0.0 으로 표시 (UI 에서 signals 로 구분)
+        confidence = confidence_raw if confidence_raw is not None else 0.0
+
+        normalized = [_normalize(c) for c in qdrant_chunks]
+
+    # page_lookup retrieval 스킵 시엔 외부 보완도 의미 없음 (페이지 직접 조회용).
+    if use_mcp and not skip_retrieval:
         try:
             from pipeline.korean_law_client import fetch_law_chunks_from_mcp
             doc_names = [c.get("document_name", "") for c in qdrant_chunks]
@@ -322,7 +343,7 @@ def run_pipeline(
 
     # 법제처 공식 API 보완: 토글 ON + Qdrant 신뢰도 낮을 때 자동 트리거
     web_used = False
-    if use_web:
+    if use_web and not skip_retrieval:
         from pipeline.official_law_searcher import should_trigger, search_official_sources
         scores = [c["score"] for c in qdrant_chunks]
         if should_trigger(scores):
@@ -373,25 +394,22 @@ def run_pipeline(
         progress_cb=progress_cb,
     )
 
-    # 캐시 저장 — 단발 질의 + 정상 답변(판단불가 아님) 만.
-    # 멀티턴은 컨텍스트 키 폭발 위험으로 스킵, 판단불가는 다음 시도에서 더 나은 답변
-    # 가능성이 있어 캐시하지 않는다.
-    if not (prior_turns or []):
-        verdict = (result.get("verdict") or "").strip()
-        if verdict and verdict != "판단불가":
-            try:
-                answer_cache.put(
-                    **cache_key_args,
-                    entry=answer_cache.CacheEntry(
-                        result=result,
-                        confidence=confidence,
-                        web_used=web_used,
-                        ctx_stats=ctx_stats,
-                    ),
-                )
-                print(f"[run_pipeline] 캐시 저장 — query={search_query!r}", file=sys.stderr)
-            except Exception as exc:
-                print(f"[run_pipeline] 캐시 저장 실패: {exc}", file=sys.stderr)
+    # 캐시 저장 — 단발·멀티턴 모두. 판단불가는 다음 시도 여지를 위해 스킵.
+    verdict = (result.get("verdict") or "").strip()
+    if verdict and verdict != "판단불가":
+        try:
+            answer_cache.put(
+                **cache_key_args,
+                entry=answer_cache.CacheEntry(
+                    result=result,
+                    confidence=confidence,
+                    web_used=web_used,
+                    ctx_stats=ctx_stats,
+                ),
+            )
+            print(f"[run_pipeline] 캐시 저장 — query={search_query!r}", file=sys.stderr)
+        except Exception as exc:
+            print(f"[run_pipeline] 캐시 저장 실패: {exc}", file=sys.stderr)
 
     return (result, confidence, web_used, ctx_stats)
 
@@ -723,12 +741,15 @@ if question:
             return "📂 문서 목록 조회"
         return f"🛠 {bare}"
 
+    import html as _html_mod
+    import re as _re_mod
+    _SUMMARY_STREAM_RE = _re_mod.compile(r'"summary"\s*:\s*"((?:[^"\\]|\\.)*)')
+
     def _render_progress_html(events: list[dict]) -> str:
-        """진행 이벤트 리스트 → HTML. 도구 호출은 결과 매칭으로 ✓/⚠ 표시."""
-        # 도구 호출 카운트로 매칭 (id 까지 안 가도 순서 매칭으로 충분).
-        # 각 tool_use 다음에 같은 name 의 tool_result 가 오면 closed 처리.
+        """진행 이벤트 리스트 → HTML. 도구 호출 ✓/⚠ + 답변 stream 미리보기."""
         rendered_lines: list[str] = []
         pending_tool: dict | None = None
+        stream_chunks: list[str] = []
         for ev in events:
             t = ev.get("type")
             if t == "stage":
@@ -755,6 +776,37 @@ if question:
                     )
                     rendered_lines[-1] = last
                     pending_tool = None
+            elif t == "text_delta":
+                stream_chunks.append(ev.get("text", ""))
+
+        # 답변 토큰 stream 미리보기 — JSON 의 summary 필드를 추출해 보여줌.
+        # 추출 실패하면 글자 수 카운터로 대체.
+        if stream_chunks:
+            full = "".join(stream_chunks)
+            m = _SUMMARY_STREAM_RE.search(full)
+            if m:
+                # JSON escape 디코딩 (최소): \\n → \n, \\" → ", \\\\ → \\
+                preview = (
+                    m.group(1)
+                    .replace('\\n', ' ')
+                    .replace('\\"', '"')
+                    .replace('\\\\', '\\')
+                )
+                if preview.strip():
+                    safe = _html_mod.escape(preview[-400:])
+                    rendered_lines.append(
+                        f'<div style="color:#cbd5e1;font-size:13px;line-height:1.55;'
+                        f'margin:8px 0 0;background:#0f172a;padding:10px 12px;'
+                        f'border-radius:6px;border-left:3px solid #38bdf8;'
+                        f'white-space:pre-wrap;">'
+                        f'✍️ {safe}</div>'
+                    )
+            else:
+                rendered_lines.append(
+                    f'<div style="color:#94a3b8;font-size:12px;margin:6px 0;">'
+                    f'✍️ 답변 작성 중… ({len(full):,}자 수신)</div>'
+                )
+
         if not rendered_lines:
             rendered_lines.append(
                 '<div style="color:#94a3b8;font-size:13px;">'
