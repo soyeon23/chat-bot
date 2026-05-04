@@ -22,8 +22,8 @@
 > 현재 우선순위·해결된 항목·작업량 추정 모두 그 파일에 정리됨.
 
 **바로 실행 가능한 다음 액션**:
-1. `python scripts/eval_full.py` — 평가셋 baseline 갱신 (10분)
-2. 본체 3종 PDF 가용 시 프로젝트 루트에 드롭 + 동기화 → 검색 커버리지 30%+ ↑
+1. (선택) #4-A 비교형 케이스 (4.2 시행령 vs 시행규칙) — retriever multi-doc fan-out → 39/39 100% 가능
+2. (미래) #12-A F5+ 외부 OpenAPI fetch — 본문 자동 갱신 + 외부 법령 보완
 
 ---
 
@@ -74,6 +74,7 @@
 - `pipeline/local_doc_mcp.py` — Phase H 로컬 문서 도구
 - `pipeline/answerer.py` — claude-agent-sdk 답변 생성
 - `pipeline/chunker.py` — 1.4.0 (매뉴얼 페이지 라우팅)
+- `pipeline/hwpml_parser.py` — HWPML(XML) 직접 파싱 (stdlib, hwp-mcp 우회)
 - `pipeline/sync.py` — 증분 동기화 (file_hashes.json)
 - `pipeline/mcp_sync.py` — MCP 헬스체크 / 업데이트
 
@@ -87,22 +88,24 @@
 
 ---
 
-## 📊 핵심 메트릭 (마지막 sync 기준 — 1.4.0)
+## 📊 핵심 메트릭 (마지막 sync 기준 — 1.4.0 + HWPML 본체 3종)
 
-- 총 청크: **940**
+- 총 청크: **1,074**
   - 매뉴얼 PDF: 844 (페이지 커버리지 64.3%, article_no = "p.N" 형식)
   - 시행규칙 별지 10개: 84
   - 시행령 별표 7개: 12
-- 평가셋 통과율: 96.8% (1.3.2 baseline — 1.4.0 재실행 필요)
+  - 혁신법 본체 (HWPML): 56
+  - 시행령 본체 (HWPML): 73
+  - 시행규칙 본체 (HWPML): 5
+- 평가셋 통과율: **97.4%** (38/39, ACCEPT — `09d04f5`)
 - 단위 테스트: 전체 PASS
 
 ---
 
 ## 🚧 알려진 한계
 
-- HWPML 본체 3종 (혁신법·시행령·시행규칙 본문) 미인덱싱 — PDF 추가 또는 XML 파서 작성 필요
-- 답변 응답 시간 1~2분 (멀티턴 누적 시 더 느림) — Phase H1 속도 최적화 보류 중
 - 매뉴얼 PDF 페이지 커버리지 64% — 책 인쇄 layout 의 빈 짝수 페이지 (의도된 동작)
+- 4.2 시행령 vs 시행규칙 비교형 케이스 — retrieval top-1 정책 한계 (잔여 1/39, 별도 phase)
 
 ---
 
