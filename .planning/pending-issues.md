@@ -1,8 +1,8 @@
 # 현재 해결해야 할 이슈 정리
 
 작성일: 2026-04-29
-최종 갱신: 2026-05-04 (속도 3-pack + 사이드바 UX + 멀티턴 rewriter 보강 — *미커밋*)
-기준 커밋: `73a3a08` (chunker 1.4.0 + 컬렉션 graceful) + 이후 미커밋 변경분
+최종 갱신: 2026-05-04 (커밋 `665b7e9` 이후)
+기준 커밋: `665b7e9` (사이드바 + rewriter 부분전환 + 속도 3-pack)
 
 > ⚠️ **이 파일이 단일 진실 — 작업 전후 반드시 갱신**
 > compact / 세션 종료 전 / 작업 완료 시 즉시 상태 업데이트.
@@ -14,10 +14,10 @@
 
 | 이슈 | 해결 방식 | 커밋 |
 |---|---|---|
-| ~~사이드바 첫 진입 시 노출~~ | `pages/00_⚙️_환경설정.py` — `is_first_run` 분기에서 `[data-testid="stSidebar"]` `display: none` CSS 주입. 시작하기 → 직접 챗봇 진입 (환경설정 재방문 없음) | *미커밋* |
-| ~~멀티턴 부분 전환 (문서 동일, 조문·페이지만 변경) 컨텍스트 손실~~ | `pipeline/query_analyzer.py` — *부분 전환* 룰 신설. 짧은 "11조"/"다음 페이지" 등은 직전 doc_name_hint 강제 이어받음. 12조 이어 11조 95% confidence 회복 | *미커밋* |
-| ~~#5 Phase H HWP 도구 워밍업 비용~~ | `app.py` 부팅 시 `hwp-warmup` 데몬 스레드 — `_scan_dirs()` 의 모든 .hwp/.hwpx 를 `_load_pages()` 로 사전 파싱. 첫 호출 30~60초 → 즉시 응답 | *미커밋* |
-| ~~#6 답변 응답 시간 (속도 3-pack)~~ | (a) `pipeline/answer_cache.py` 디스크 JSON 캐시 — 단발 질의 + 비-판단불가 만 저장, chunker.CHUNKER_VERSION 변경 시 자동 무효화. 재질의 0.1초. (b) `pipeline/answerer.py` `progress_cb` 체인 + `app.py` 라이브 진행 UI — 도구 호출 단계 (📖/📄/🔍) ✓/⚠ 마커로 가시화 | *미커밋* |
+| ~~사이드바 첫 진입 시 노출~~ | `pages/00_⚙️_환경설정.py` — `is_first_run` 분기에서 `[data-testid="stSidebar"]` `display: none` CSS 주입. 시작하기 → 직접 챗봇 진입 (환경설정 재방문 없음) | `665b7e9` |
+| ~~멀티턴 부분 전환 (문서 동일, 조문·페이지만 변경) 컨텍스트 손실~~ | `pipeline/query_analyzer.py` — *부분 전환* 룰 신설. 짧은 "11조"/"다음 페이지" 등은 직전 doc_name_hint 강제 이어받음. 12조 이어 11조 95% confidence 회복 | `665b7e9` |
+| ~~#5 Phase H HWP 도구 워밍업 비용~~ | `app.py` 부팅 시 `hwp-warmup` 데몬 스레드 — `_scan_dirs()` 의 모든 .hwp/.hwpx 를 `_load_pages()` 로 사전 파싱. 첫 호출 30~60초 → 즉시 응답 | `665b7e9` |
+| ~~#6 답변 응답 시간 (속도 3-pack)~~ | (a) `pipeline/answer_cache.py` 디스크 JSON 캐시 — 단발 질의 + 비-판단불가 만 저장, chunker.CHUNKER_VERSION 변경 시 자동 무효화. 재질의 0.1초. (b) `pipeline/answerer.py` `progress_cb` 체인 + `app.py` 라이브 진행 UI — 도구 호출 단계 (📖/📄/🔍) ✓/⚠ 마커로 가시화 | `665b7e9` |
 | ~~매뉴얼 PDF chunker 1.3.4 회귀~~ | chunker 1.4.0 페이지 기반 라우팅 (`_split_by_pages`). 청크 742→844, 페이지 커버리지 32.8%→64.3%, "151p" 회복 | `73a3a08` |
 | ~~청크 수 감소 추세~~ | 1.4.0 으로 회복 | `73a3a08` |
 | ~~Phase H max_turns RuntimeError~~ | `_run_query_sync` graceful transport 폴백 → "판단불가" stub | `73a3a08` |
@@ -88,13 +88,13 @@
 
 ## 🟢 Medium — 운영·품질
 
-### ~~5. Phase H 도구 모드 워밍업 비용~~ ✅ 해결 (*미커밋*)
+### ~~5. Phase H 도구 모드 워밍업 비용~~ ✅ 해결 (`665b7e9`)
 
 `app.py` `hwp-warmup` 데몬 스레드 — 부팅 시 모든 .hwp/.hwpx 파싱 캐시 채움.
 
 ---
 
-### ~~6. 답변 응답 시간 (속도 3-pack 적용)~~ ✅ 해결 (*미커밋*)
+### ~~6. 답변 응답 시간 (속도 3-pack 적용)~~ ✅ 해결 (`665b7e9`)
 
 채택안: 답변 캐시(C) + HWP 워밍(B) + 출력 진행 UI(A). 미적용: 프롬프트 캐싱·page_lookup retrieval 스킵 (필요 시 향후 추가).
 
@@ -148,8 +148,7 @@
 
 | 우선 | 이슈 | 작업량 | 효과 |
 |---|---|---|---|
-| 0 | **현재 미커밋 변경분 커밋** (사이드바 + rewriter + 속도 3-pack) | 1분 | 다음 세션 컨텍스트 복원 + 회귀 안전망 |
-| 1 | **#4 평가셋 baseline 갱신** | 10분 | 1.4.0 효과 정량화 + rewriter/캐시 회귀 안전망 |
+| 1 | **#4 평가셋 baseline 갱신** | 10분 | 1.4.0 + rewriter/캐시 회귀 안전망 (현재 baseline 1.3.2 시점) |
 | 2 | **#1 HWPML 본체 3종** — PDF 가지면 드롭+sync, 없으면 XML 파서 | 5분 (PDF) / 1~2시간 (파서) | 검색 커버리지 30%+ ↑, "혁신법 제15조 본문" 답변 가능 |
 
 ---
