@@ -232,6 +232,7 @@ async def _run_query(
     user_prompt: str,
     *,
     enable_tools: bool = False,
+    progress_cb=None,
 ) -> str:
     """Agent SDK 호출. 모든 AssistantMessage 의 TextBlock 을 이어붙여 반환.
 
@@ -239,6 +240,11 @@ async def _run_query(
         enable_tools: True 면 Phase H 의 로컬 PDF/HWP 직접 접근 도구
             (`mcp__local_doc__read_page` 등)를 활성화하고 max_turns 를 늘린다.
             page_lookup·article_lookup 경로에서만 켠다.
+        progress_cb: Optional[Callable[[dict], None]]. 호출 시 다음 형식의
+            이벤트를 받는다 (UI 진행상황 표시용):
+              {"type": "tool_use", "name": str, "input": dict}
+              {"type": "tool_result", "name": str, "is_error": bool}
+            예외 안전 — callback 에서 raise 해도 본 코루틴은 무영향.
     """
     # 지연 import: streamlit 워커 스레드에서 import 비용 분산.
     from claude_agent_sdk import (
@@ -246,8 +252,19 @@ async def _run_query(
         ClaudeAgentOptions,
         ResultMessage,
         TextBlock,
+        ToolUseBlock,
+        ToolResultBlock,
+        UserMessage,
         query,
     )
+
+    def _emit(event: dict) -> None:
+        if progress_cb is None:
+            return
+        try:
+            progress_cb(event)
+        except Exception:
+            pass
 
     if enable_tools:
         # Phase H: in-process MCP 서버를 띄워 read_page / get_article / search_text
@@ -288,6 +305,9 @@ async def _run_query(
     # 이는 SDK 1.x 에서 max_turns 도달 시 관찰되는 정상 동작에 가깝지만, 사용자
     # 에게 Fatal error 로 노출되면 안 된다. try/except 로 감싸 stream 종료 후
     # 누적 텍스트 + max_turns 플래그 조합을 평가하는 단일 경로로 모은다.
+    # 도구별 이름 매핑 — UI 라벨 생성용. tool_use_id → name 보관해 결과 매칭.
+    tool_id_to_name: dict[str, str] = {}
+
     try:
         async for msg in query(prompt=user_prompt, options=options):
             if isinstance(msg, AssistantMessage):
@@ -298,6 +318,23 @@ async def _run_query(
                 for block in msg.content:
                     if isinstance(block, TextBlock):
                         text_chunks.append(block.text)
+                    elif isinstance(block, ToolUseBlock):
+                        tool_id_to_name[block.id] = block.name
+                        _emit({
+                            "type": "tool_use",
+                            "name": block.name,
+                            "input": dict(block.input or {}),
+                        })
+            elif isinstance(msg, UserMessage):
+                # 도구 결과 — Claude 가 이전 턴에 호출한 mcp 결과를 받은 시점.
+                for block in getattr(msg, "content", []) or []:
+                    if isinstance(block, ToolResultBlock):
+                        name = tool_id_to_name.get(block.tool_use_id, "")
+                        _emit({
+                            "type": "tool_result",
+                            "name": name,
+                            "is_error": bool(block.is_error),
+                        })
             elif isinstance(msg, ResultMessage):
                 if msg.is_error:
                     err_blob = " | ".join(msg.errors or [])
@@ -372,6 +409,7 @@ def _run_query_sync(
     user_prompt: str,
     *,
     enable_tools: bool = False,
+    progress_cb=None,
 ) -> str:
     """동기 인터페이스 래퍼. Streamlit/CLI 가 그대로 호출할 수 있도록 한다.
 
@@ -389,7 +427,10 @@ def _run_query_sync(
                 new_loop = asyncio.new_event_loop()
                 try:
                     return new_loop.run_until_complete(
-                        _run_query(model, system_prompt, user_prompt, enable_tools=enable_tools)
+                        _run_query(
+                            model, system_prompt, user_prompt,
+                            enable_tools=enable_tools, progress_cb=progress_cb,
+                        )
                     )
                 finally:
                     new_loop.close()
@@ -397,7 +438,10 @@ def _run_query_sync(
             # no current event loop
             pass
         return asyncio.run(
-            _run_query(model, system_prompt, user_prompt, enable_tools=enable_tools)
+            _run_query(
+                model, system_prompt, user_prompt,
+                enable_tools=enable_tools, progress_cb=progress_cb,
+            )
         )
 
     try:
@@ -433,6 +477,7 @@ def generate_answer(
     chunks: list[dict],
     kind: str = "open",
     prior_turns: list[dict] | None = None,
+    progress_cb=None,
 ) -> dict:
     """검색된 chunks를 근거로 Claude에게 질문하고 AnswerPayload dict를 반환한다.
 
@@ -490,7 +535,8 @@ def generate_answer(
     )
 
     raw_text = _run_query_sync(
-        model, system_prompt, user_prompt, enable_tools=enable_tools
+        model, system_prompt, user_prompt,
+        enable_tools=enable_tools, progress_cb=progress_cb,
     )
     if not raw_text.strip():
         raise RuntimeError("Claude 응답이 비어 있습니다.")

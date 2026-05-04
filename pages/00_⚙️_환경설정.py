@@ -152,6 +152,22 @@ is_first_run = not cfg.onboarding_completed
 checks: list[CheckResult] = run_all_checks(include_optional=True)
 sys_info = system_summary()
 
+# 최초 실행 시 사이드바 완전 숨김 — 페이지 네비게이션·열기 토글까지 차단해
+# 사용자가 환경 검사 → "시작하기" 외 다른 페이지로 새지 않게.
+# 온보딩 완료 후엔 환경설정 재방문 시 사이드바 정상 노출.
+if is_first_run:
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"] { display: none !important; }
+        [data-testid="stSidebarCollapsedControl"] { display: none !important; }
+        [data-testid="collapsedControl"] { display: none !important; }
+        button[kind="header"] { display: none !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
 # ── 헤더 ────────────────────────────────────────────────────
 st.markdown(
     f"""

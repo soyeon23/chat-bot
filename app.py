@@ -35,6 +35,34 @@ _cfg_on_start = load_config()
 if not _cfg_on_start.onboarding_completed:
     st.switch_page("pages/00_⚙️_환경설정.py")
 
+# HWP 페이지 캐시 사전 워밍업 — 백그라운드 스레드로 1회.
+# 첫 article_lookup 에서 hwp-mcp 서브프로세스 + HWP 파싱(30~60s)을 사용자가
+# 기다리는 대신, 앱 부팅 직후 백그라운드로 끝내 둠. 모듈 전역 _doc_cache 에
+# 적재되므로 이후 read_page / get_article 호출은 메모리 히트.
+# 세션당 1회 (Streamlit script 재실행마다 session_state 로 재진입 차단).
+if not st.session_state.get("_hwp_warmup_started"):
+    import threading as _wm_threading
+
+    def _warmup_hwp_cache() -> None:
+        try:
+            from pipeline.local_doc_mcp import _scan_dirs, _load_pages
+            for p in _scan_dirs():
+                if p.suffix.lower() in (".hwp", ".hwpx"):
+                    try:
+                        _load_pages(p)
+                    except Exception as e:  # noqa: BLE001
+                        # HWPML 등 미지원 포맷은 hwp_parser 에서 빈 결과 반환 — 정상.
+                        # 그 외 에러는 로깅만.
+                        print(
+                            f"[warmup] {p.name} 파싱 실패: {type(e).__name__}: {e}",
+                            file=sys.stderr,
+                        )
+        except Exception as e:  # noqa: BLE001
+            print(f"[warmup] HWP 캐시 워밍 실패: {type(e).__name__}: {e}", file=sys.stderr)
+
+    _wm_threading.Thread(target=_warmup_hwp_cache, daemon=True, name="hwp-warmup").start()
+    st.session_state["_hwp_warmup_started"] = True
+
 # 자동 동기화 (auto_sync_on_start) — 세션당 한 번만, 변경 없으면 0초.
 # 변경이 발견되면 사이드바 알림으로 안내만 하고 실 인덱싱은 사용자 클릭 후.
 if _cfg_on_start.auto_sync_on_start and not st.session_state.get("_auto_sync_done"):
@@ -186,12 +214,16 @@ def run_pipeline(
     use_mcp: bool,
     use_web: bool,
     prior_turns: list[dict] | None = None,
+    progress_cb=None,
 ) -> tuple[dict, float, bool, dict]:
     """질문 → (AnswerPayload dict, confidence %, web_used, ctx_stats).
 
     Args:
         prior_turns: 직전 대화 턴 (UI session_state.messages 의 마지막 N개).
                      analyzer 가 후속 질문에서 페이지·문서 컨텍스트를 이어받기 위함.
+        progress_cb: Optional[Callable[[dict], None]]. UI 진행상황 표시용.
+                     이벤트 종류: stage(검색 시작), tool_use(도구 호출),
+                     tool_result(도구 응답), stage_done(최종 답변 생성 중).
 
     Returns:
         result: AnswerPayload dict
@@ -202,9 +234,20 @@ def run_pipeline(
                     "limit_tokens": int, "signals": list[str]}
     """
     from pipeline.retriever import search_chunks_smart
-    from pipeline.answerer import generate_answer, build_context
+    from pipeline.answerer import generate_answer, build_context, get_model
     from pipeline.query_analyzer import analyze_query
+    from pipeline import answer_cache
 
+    def _stage(name: str) -> None:
+        """단계 이벤트를 progress_cb 로 통지 (예외 안전)."""
+        if progress_cb is None:
+            return
+        try:
+            progress_cb({"type": "stage", "name": name})
+        except Exception:
+            pass
+
+    _stage("질의 분석")
     embedder = _load_embedder()
 
     # Claude 기반 의도 분석 — 페이지·문서·조문·비교 의도를 자유 표현에서 추출.
@@ -235,6 +278,25 @@ def run_pipeline(
             f"(original={question!r})",
             file=sys.stderr,
         )
+
+    # 답변 캐시 — 단발 질의 (prior_turns 빔) 만 적용. rewritten_query 가 self-contained
+    # 라 같은 의도의 재요청을 정확히 잡아낸다. 멀티턴은 컨텍스트마다 답이 달라
+    # 키 폭발 + hit-rate 미미 → 스킵.
+    cache_key_args = dict(
+        query=search_query,
+        doc_type_filter=doc_type_filter,
+        use_mcp=use_mcp,
+        use_web=use_web,
+        claude_model=get_model(kind=hints.kind),
+    )
+    if not (prior_turns or []):
+        cached = answer_cache.get(**cache_key_args)
+        if cached is not None:
+            print(f"[run_pipeline] 캐시 HIT — query={search_query!r}", file=sys.stderr)
+            _stage("캐시 적중")
+            return (cached.result, cached.confidence, cached.web_used, cached.ctx_stats)
+
+    _stage("문서 검색")
     vec = embedder.embed_query(search_query)
 
     qdrant_chunks = search_chunks_smart(
@@ -252,6 +314,7 @@ def run_pipeline(
         try:
             from pipeline.korean_law_client import fetch_law_chunks_from_mcp
             doc_names = [c.get("document_name", "") for c in qdrant_chunks]
+            _stage("법제처 MCP 조회")
             mcp_chunks = fetch_law_chunks_from_mcp(question, doc_names)
             normalized += mcp_chunks
         except Exception as exc:
@@ -263,6 +326,7 @@ def run_pipeline(
         from pipeline.official_law_searcher import should_trigger, search_official_sources
         scores = [c["score"] for c in qdrant_chunks]
         if should_trigger(scores):
+            _stage("법제처 공식 API 보완")
             official_chunks = search_official_sources(question)
             if official_chunks:
                 normalized += official_chunks
@@ -303,14 +367,33 @@ def run_pipeline(
         "signals": boost_signals,
     }
 
-    return (
-        generate_answer(
-            question, normalized, kind=hints.kind, prior_turns=prior_turns,
-        ),
-        confidence,
-        web_used,
-        ctx_stats,
+    _stage("답변 생성")
+    result = generate_answer(
+        question, normalized, kind=hints.kind, prior_turns=prior_turns,
+        progress_cb=progress_cb,
     )
+
+    # 캐시 저장 — 단발 질의 + 정상 답변(판단불가 아님) 만.
+    # 멀티턴은 컨텍스트 키 폭발 위험으로 스킵, 판단불가는 다음 시도에서 더 나은 답변
+    # 가능성이 있어 캐시하지 않는다.
+    if not (prior_turns or []):
+        verdict = (result.get("verdict") or "").strip()
+        if verdict and verdict != "판단불가":
+            try:
+                answer_cache.put(
+                    **cache_key_args,
+                    entry=answer_cache.CacheEntry(
+                        result=result,
+                        confidence=confidence,
+                        web_used=web_used,
+                        ctx_stats=ctx_stats,
+                    ),
+                )
+                print(f"[run_pipeline] 캐시 저장 — query={search_query!r}", file=sys.stderr)
+            except Exception as exc:
+                print(f"[run_pipeline] 캐시 저장 실패: {exc}", file=sys.stderr)
+
+    return (result, confidence, web_used, ctx_stats)
 
 
 def _ingest_file(uploaded_file, doc_name: str, doc_type: str) -> None:
@@ -591,7 +674,7 @@ if question:
     with st.chat_message("user"):
         st.markdown(question)
 
-    # 답변 생성 — 취소 버튼 + 백그라운드 워커
+    # 답변 생성 — 취소 버튼 + 백그라운드 워커 + 진행상황 라이브 표시
     import threading
 
     from pipeline.answerer import RateLimitError
@@ -600,16 +683,84 @@ if question:
     cancel_event = threading.Event()
     result_holder: dict = {}
 
+    # 진행상황 이벤트 큐 (워커 → 메인 스레드).
+    # progress_cb 는 워커 스레드에서 호출되므로 list + lock 으로 단순 보호.
+    progress_events: list[dict] = []
+    progress_lock = threading.Lock()
+
+    def _on_progress(event: dict) -> None:
+        with progress_lock:
+            progress_events.append(event)
+
     def _worker():
         try:
             result_holder["value"] = run_pipeline(
                 question, doc_type_filter, use_mcp, use_web,
                 prior_turns=prior_turns_for_analyzer,
+                progress_cb=_on_progress,
             )
         except RateLimitError as exc:
             result_holder["rate_limit"] = str(exc)
         except Exception as exc:  # noqa: BLE001
             result_holder["error"] = f"{type(exc).__name__}: {exc}"
+
+    def _format_tool_label(name: str, args: dict) -> str:
+        """MCP 도구 이름 + 인자를 한국어 진행 메시지로."""
+        bare = name.replace("mcp__local_doc__", "")
+        doc = (args.get("doc_name") or "").strip()
+        if bare == "read_page":
+            page = args.get("page_num") or args.get("page") or "?"
+            return f"📖 {doc or '문서'} p.{page} 읽는 중"
+        if bare == "get_article":
+            art = args.get("article_no") or "?"
+            return f"📄 {doc or '문서'} {art} 조회"
+        if bare == "search_text":
+            q = (args.get("query") or "").strip()
+            return f"🔍 {doc or '문서'}에서 '{q}' 검색"
+        if bare == "list_articles":
+            return f"📋 {doc or '문서'} 조문 목록"
+        if bare == "list_documents":
+            return "📂 문서 목록 조회"
+        return f"🛠 {bare}"
+
+    def _render_progress_html(events: list[dict]) -> str:
+        """진행 이벤트 리스트 → HTML. 도구 호출은 결과 매칭으로 ✓/⚠ 표시."""
+        # 도구 호출 카운트로 매칭 (id 까지 안 가도 순서 매칭으로 충분).
+        # 각 tool_use 다음에 같은 name 의 tool_result 가 오면 closed 처리.
+        rendered_lines: list[str] = []
+        pending_tool: dict | None = None
+        for ev in events:
+            t = ev.get("type")
+            if t == "stage":
+                rendered_lines.append(
+                    f'<div style="color:#94a3b8;font-size:13px;">'
+                    f'⏳ {ev.get("name", "")}…</div>'
+                )
+            elif t == "tool_use":
+                label = _format_tool_label(ev.get("name", ""), ev.get("input") or {})
+                rendered_lines.append(
+                    f'<div style="color:#cbd5e1;font-size:13px;margin-left:14px;">'
+                    f'  • {label}…</div>'
+                )
+                pending_tool = ev
+            elif t == "tool_result":
+                # 마지막 tool_use 라벨 옆에 ✓/⚠ 갱신
+                if rendered_lines and pending_tool is not None:
+                    last = rendered_lines[-1]
+                    mark = "⚠" if ev.get("is_error") else "✓"
+                    color = "#ef4444" if ev.get("is_error") else "#22c55e"
+                    last = last.replace(
+                        "…</div>",
+                        f' <span style="color:{color};">{mark}</span></div>',
+                    )
+                    rendered_lines[-1] = last
+                    pending_tool = None
+        if not rendered_lines:
+            rendered_lines.append(
+                '<div style="color:#94a3b8;font-size:13px;">'
+                '🔍 근거 검색 및 답변 생성 중…</div>'
+            )
+        return "<div>" + "".join(rendered_lines) + "</div>"
 
 
     with st.chat_message("assistant"):
@@ -619,20 +770,23 @@ if question:
         thread = threading.Thread(target=_worker, daemon=True)
         thread.start()
 
-        with spinner_box.container():
-            st.markdown(
-                '<div style="color:#94a3b8;font-size:13px;">'
-                '🔍 근거 검색 및 답변 생성 중...</div>',
-                unsafe_allow_html=True,
-            )
+        spinner_box.markdown(_render_progress_html([]), unsafe_allow_html=True)
         if cancel_box.button("⛔ 취소", key=f"cancel_{len(st.session_state.messages)}"):
             cancel_event.set()
 
-        # 워커 완료 또는 취소까지 폴링
+        # 워커 완료 또는 취소까지 폴링 — 매 사이클 진행상황 갱신
+        last_event_count = 0
         while thread.is_alive():
             if cancel_event.is_set():
                 break
-            thread.join(timeout=0.2)
+            thread.join(timeout=0.4)
+            with progress_lock:
+                snapshot = list(progress_events)
+            if len(snapshot) != last_event_count:
+                spinner_box.markdown(
+                    _render_progress_html(snapshot), unsafe_allow_html=True,
+                )
+                last_event_count = len(snapshot)
 
         spinner_box.empty()
         cancel_box.empty()

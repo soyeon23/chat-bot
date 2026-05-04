@@ -39,6 +39,9 @@ data/config.json
 # 평가 baseline (선택적 커밋 — 회귀 비교 anchor)
 data/eval_baseline.json
 
+# 답변 캐시 (런타임 — chunker 버전 변경 시 자동 무효화)
+data/answer_cache/
+
 # 원본 PDF/HWP 자료 (용량 큼, 정부 공개 자료라 따로 다운로드)
 [본권]*.pdf
 *매뉴얼*.pdf
