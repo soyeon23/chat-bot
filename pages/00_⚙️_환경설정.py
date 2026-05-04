@@ -250,7 +250,7 @@ if auto_fixable:
 # ── 프로젝트 경로 ───────────────────────────────────────────
 st.markdown('<div class="section-title">📂 프로젝트 경로</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="section-caption">PDF·HWP 파일이 있는 폴더. 변경 후 인덱싱하려면 batch_ingest.py 재실행.</div>',
+    '<div class="section-caption">PDF·HWP 파일이 있는 폴더. 저장 시 변경사항이 자동으로 인덱싱됩니다.</div>',
     unsafe_allow_html=True,
 )
 
@@ -616,9 +616,9 @@ new_hwp_enabled = st.checkbox(
     value=cfg.hwp_mcp_enabled,
     key="cfg_hwp_mcp",
     help=(
-        "ON 시 batch_ingest.py 가 .hwp / .hwpx 파일도 PDF와 함께 인덱싱합니다. "
-        "내부적으로 treesoop/hwp-mcp 를 stdio MCP 서버로 띄워 텍스트를 추출합니다. "
-        "OLE2 기반 HWP v5.x / HWPX 만 지원되며, 법제처 포털이 배포하는 HWPML(XML) 포맷은 미지원."
+        "ON 시 동기화가 .hwp / .hwpx 파일도 PDF와 함께 인덱싱합니다. "
+        "OLE2 기반 HWP v5.x / HWPX 는 treesoop/hwp-mcp 로, "
+        "HWPML(XML, 법제처 포털 배포본) 은 stdlib XML 파서로 직접 처리합니다."
     ),
 )
 if new_hwp_enabled and not cfg.hwp_mcp_enabled:
@@ -626,7 +626,7 @@ if new_hwp_enabled and not cfg.hwp_mcp_enabled:
     try:
         import importlib
         importlib.import_module("hangul_mcp")
-        st.caption("✅ hwp-mcp 가 이미 설치되어 있습니다. 저장 후 batch_ingest.py 를 다시 실행하면 .hwp 파일이 함께 인덱싱됩니다.")
+        st.caption("✅ hwp-mcp 가 이미 설치되어 있습니다. 저장 시 .hwp 파일이 자동 인덱싱됩니다.")
     except ImportError:
         st.caption(
             "ℹ️ hwp-mcp 미설치 — 위 환경 검사 카드의 'HWP MCP' 항목에서 자동 설치 버튼을 누르거나 "
@@ -646,6 +646,12 @@ changes = (
 )
 if changes:
     if st.button("💾 설정 저장", use_container_width=True):
+        # 저장 후 자동 sync 가 필요한 변경 — 폴더 경로·HWP 토글만 해당.
+        sync_relevant = (
+            new_pdf != cfg.pdf_dir
+            or new_hwp != cfg.hwp_dir
+            or new_hwp_enabled != cfg.hwp_mcp_enabled
+        )
         update_config(
             pdf_dir=new_pdf,
             hwp_dir=new_hwp,
@@ -657,6 +663,38 @@ if changes:
             enable_comparison_escalate=new_escalate,
         )
         st.success("저장 완료")
+
+        if sync_relevant:
+            with st.spinner("📂 변경사항 자동 인덱싱 중..."):
+                try:
+                    from pipeline.sync import (
+                        apply_changes as _auto_apply,
+                        scan_changes as _auto_scan,
+                    )
+                    _auto_roots = _sync_roots_for_ui()
+                    _auto_changes = _auto_scan(roots=_auto_roots)
+                    if (
+                        _auto_changes["added"]
+                        or _auto_changes["modified"]
+                        or _auto_changes["deleted"]
+                        or _auto_changes["stale_code"]
+                    ):
+                        _auto_result = _auto_apply(_auto_changes)
+                        st.success(
+                            f"인덱싱 완료 — "
+                            f"신규/변경 {_auto_result['indexed']}건, "
+                            f"삭제 {_auto_result['deleted']}건, "
+                            f"오류 {len(_auto_result['errors'])}건 "
+                            f"({_auto_result['elapsed_sec']:.1f}s)"
+                        )
+                    else:
+                        st.info("인덱스가 이미 최신 상태입니다.")
+                except Exception as _auto_e:
+                    st.warning(
+                        f"자동 인덱싱 실패: {type(_auto_e).__name__}: {_auto_e}. "
+                        "아래 '동기화 실행' 버튼으로 수동 시도하세요."
+                    )
+
         st.rerun()
 
 # ── MCP 상태 (Phase G5) ─────────────────────────────────────
