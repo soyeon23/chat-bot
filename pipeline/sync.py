@@ -365,31 +365,8 @@ def init_metadata_from_qdrant(roots: list[Path] | None = None) -> dict:
             "indexed": True,
         }
 
-    # 디스크에 있는데 인덱싱은 안 된 HWPML 본체(혁신법/시행령/시행규칙)는
-    # indexed=False 로 사전 등록 — sync 매번 시도 회피.
-    for path in _iter_files(roots):
-        key = _abs_nfc(path)
-        if key in meta:
-            continue
-        if not _is_hwpml_file(path):
-            continue
-        try:
-            stat = path.stat()
-        except OSError:
-            continue
-        meta[key] = {
-            "mtime": stat.st_mtime,
-            "sha256": _sha256_of(path),
-            "size_bytes": stat.st_size,
-            "chunker_version": "n/a",
-            "embedder_version": EMBEDDER_VERSION,
-            "chunk_ids": [],
-            "indexed_at": now_iso,
-            "doc_type": "",
-            "page_count": 0,
-            "indexed": False,
-            "skip_reason": "hwpml_unsupported",
-        }
+    # HWPML 도 stdlib 파서 (pipeline/hwpml_parser.py) 로 인덱싱 가능 →
+    # 사전 차단 안 함. 미등록 HWPML 은 다음 scan 에서 added 로 잡혀 인덱싱.
 
     save_metadata(meta)
     return meta

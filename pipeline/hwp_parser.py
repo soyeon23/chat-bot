@@ -125,10 +125,9 @@ def parse_hwp(hwp_path: str | Path, save_raw: bool = True) -> ParseResult:
     print(f"  HWP 파싱 (hwp-mcp): {hwp_path.name}")
 
     if _is_hwpml(hwp_path):
-        # hwp-mcp 0.1.1 은 OLE2 기반만 지원 — XML 형식은 거부하므로
-        # 시간을 낭비하지 않고 즉시 빈 결과를 돌려준다.
-        print("  [경고] HWPML(XML) 포맷 감지 — hwp-mcp(OLE2)는 미지원. 건너뜀.")
-        return ParseResult(source_file=hwp_path.name, pages=[])
+        # HWPML(XML) — hwp-mcp(OLE2) 우회, stdlib 파서로 위임.
+        from pipeline.hwpml_parser import parse_hwpml
+        return parse_hwpml(hwp_path, save_raw=save_raw)
 
     async def _go():
         async with _open_session() as session:
@@ -162,6 +161,8 @@ def parse_hwp_batch(
         return {}
 
     # OLE2 미지원 파일은 사전에 분리 — 세션을 띄우지도 않는다.
+    # HWPML 은 stdlib 파서로 직접 처리 (hwp-mcp 우회).
+    from pipeline.hwpml_parser import parse_hwpml
     results: dict[Path, ParseResult] = {}
     real_targets: list[Path] = []
     for p in hwp_paths:
@@ -171,8 +172,7 @@ def parse_hwp_batch(
             results[p] = ParseResult(source_file=p.name, pages=[])
             continue
         if _is_hwpml(p):
-            print(f"  [건너뜀] HWPML(XML) 미지원: {p.name}")
-            results[p] = ParseResult(source_file=p.name, pages=[])
+            results[p] = parse_hwpml(p, save_raw=save_raw)
             continue
         real_targets.append(p)
 
