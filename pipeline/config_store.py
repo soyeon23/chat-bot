@@ -11,6 +11,17 @@ from pathlib import Path
 
 _CONFIG_PATH = Path("data/config.json")
 
+# 환경설정 페이지가 노출하는 모델 ID 의 단일 진실 (빈 문자열 = "(자동)" 모드).
+# load_config 가 저장된 값이 이 집합 밖이면 "(자동)" 으로 자동 정리한다 —
+# 옛 alias (claude-haiku-4-5-20251001, claude-sonnet-4-5 등) 가 caches·답변에
+# 누출되지 않도록 부팅 시점에 1회 cleanup.
+_KNOWN_MODELS: set[str] = {"", "claude-sonnet-4-6", "claude-opus-4-6"}
+
+
+def _migrate_model(value: str) -> str:
+    """옛/미지원 모델 ID 를 '(자동)' 빈 문자열로 reset."""
+    return value if value in _KNOWN_MODELS else ""
+
 
 @dataclass
 class ProjectConfig:
@@ -43,7 +54,18 @@ def load_config() -> ProjectConfig:
     # 기본값 + 저장된 값 병합 (필드 추가에 강하게)
     defaults = asdict(ProjectConfig())
     defaults.update({k: v for k, v in raw.items() if k in defaults})
-    return ProjectConfig(**defaults)
+    cfg = ProjectConfig(**defaults)
+
+    # 옛 모델 alias 자동 정리 — 변경 있으면 디스크에도 즉시 반영.
+    migrated = _migrate_model(cfg.claude_model)
+    if migrated != cfg.claude_model:
+        cfg.claude_model = migrated
+        try:
+            save_config(cfg)
+        except OSError:
+            pass  # 정리 실패는 다음 부팅 때 재시도
+
+    return cfg
 
 
 def save_config(cfg: ProjectConfig) -> None:

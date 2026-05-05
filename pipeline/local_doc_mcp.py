@@ -246,8 +246,18 @@ def _load_pages(path: Path) -> _DocCache:
             result = parse_hwp(str(path), save_raw=False)
             pages = [p.text for p in result.pages]
         except Exception as e:
-            print(f"[local_doc_mcp] HWP 파싱 실패 {path.name}: {type(e).__name__}: {e}",
-                  file=sys.stderr)
+            # 워밍업 스레드에서 폭주하는 RecursionError 등은 사용자 영향 없는
+            # background noise — 답변 처리 thread 에서만 노출, CHATBOT_DEBUG_WARMUP=1
+            # 로 강제 노출 가능.
+            import os as _os
+            import threading as _t
+            is_warmup = _t.current_thread().name == "hwp-warmup"
+            if not is_warmup or _os.getenv("CHATBOT_DEBUG_WARMUP") == "1":
+                print(
+                    f"[local_doc_mcp] HWP 파싱 실패 {path.name}: "
+                    f"{type(e).__name__}: {e}",
+                    file=sys.stderr,
+                )
 
     cache = _DocCache(path=path, doc_type=doc_type, mtime=mtime, pages=pages)
     _doc_cache[key] = cache

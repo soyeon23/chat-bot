@@ -48,20 +48,33 @@ if not _cfg_on_start.onboarding_completed:
 if not st.session_state.get("_hwp_warmup_started"):
     import threading as _wm_threading
 
+    _WARMUP_DEBUG = os.getenv("CHATBOT_DEBUG_WARMUP") == "1"
+
     def _warmup_hwp_cache() -> None:
+        n_ok = 0
+        n_fail = 0
         try:
             from pipeline.local_doc_mcp import _scan_dirs, _load_pages
             for p in _scan_dirs():
                 if p.suffix.lower() in (".hwp", ".hwpx"):
                     try:
                         _load_pages(p)
+                        n_ok += 1
                     except Exception as e:  # noqa: BLE001
-                        # HWPML 등 미지원 포맷은 hwp_parser 에서 빈 결과 반환 — 정상.
-                        # 그 외 에러는 로깅만.
-                        print(
-                            f"[warmup] {p.name} 파싱 실패: {type(e).__name__}: {e}",
-                            file=sys.stderr,
-                        )
+                        n_fail += 1
+                        if _WARMUP_DEBUG:
+                            print(
+                                f"[warmup] {p.name} 파싱 실패: {type(e).__name__}: {e}",
+                                file=sys.stderr,
+                            )
+            if n_fail:
+                print(
+                    f"[warmup] HWP 캐시: 성공 {n_ok}, 실패 {n_fail} "
+                    f"(상세는 CHATBOT_DEBUG_WARMUP=1)",
+                    file=sys.stderr,
+                )
+            elif n_ok:
+                print(f"[warmup] HWP 캐시: {n_ok}개 캐싱 완료", file=sys.stderr)
         except Exception as e:  # noqa: BLE001
             print(f"[warmup] HWP 캐시 워밍 실패: {type(e).__name__}: {e}", file=sys.stderr)
 
