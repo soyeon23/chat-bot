@@ -68,21 +68,6 @@ class CacheEntry:
     ctx_stats: dict
 
 
-def _hash_prior_turns(prior_turns: Optional[list]) -> str:
-    """멀티턴 직전 대화의 안정적 해시. 빈 입력은 빈 문자열."""
-    if not prior_turns:
-        return ""
-    try:
-        # role + content 만 추출 — citations 등 메타는 캐시 키에서 제외.
-        canon = json.dumps(
-            [{"r": t.get("role", ""), "c": t.get("content", "")} for t in prior_turns],
-            ensure_ascii=False, sort_keys=True,
-        )
-    except Exception:
-        return ""
-    return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:16]
-
-
 def _cache_key(
     *,
     query: str,
@@ -90,9 +75,10 @@ def _cache_key(
     use_mcp: bool,
     use_web: bool,
     claude_model: str,
-    prior_turns: Optional[list] = None,
+    prior_turns: Optional[list] = None,  # 호환용 — 무시. caller 시그니처 안정 위해 보존.
 ) -> tuple[str, str]:
-    """질의 + 옵션 + (멀티턴 시) 직전 대화 해시 조합의 캐시 키.
+    """질의 + 옵션 조합의 캐시 키. prior_turns 는 키에서 제외 — 멀티턴이라도
+    동일 의도(rewritten_query) 면 적중. analyzer 가 self-contain 화를 책임진다.
 
     Returns:
         (sha_hex, key_repr) — 파일명용 해시 + 디버그용 원본 표현
@@ -103,7 +89,6 @@ def _cache_key(
         f"mcp={int(bool(use_mcp))}",
         f"web={int(bool(use_web))}",
         f"model={claude_model or ''}",
-        f"pt={_hash_prior_turns(prior_turns)}",
     ]
     repr_str = "|".join(parts)
     sha = hashlib.sha256(repr_str.encode("utf-8")).hexdigest()

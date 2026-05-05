@@ -279,17 +279,18 @@ def run_pipeline(
             file=sys.stderr,
         )
 
-    # 답변 캐시 — 단발/멀티턴 모두 적용. 멀티턴은 prior_turns 해시까지 키에
-    # 포함해 같은 컨텍스트일 때만 적중 (다음 페이지 후속처럼 직전 답변이 달라
-    # 컨텍스트도 달라지면 자연스럽게 miss → key 폭발 위험은 동일 컨텍스트
-    # 반복 시에만 hit 으로 제한됨).
+    # 답변 캐시 — query_analyzer 의 rewritten_query 가 멀티턴 컨텍스트를
+    # 흡수해 self-contained 화 한다는 점에 의존: prior_turns 자체는 캐시 키에서
+    # 제외하고 *의도가 같으면* 항상 hit 으로 풀어준다. 같은 채팅 안에서 3턴
+    # 후 같은 질문 반복도 적중. 부작용: analyzer 가 self-contain 못 한
+    # 케이스에서 직전 컨텍스트와 무관한 캐시가 노출될 위험은 작게 있지만,
+    # 판단불가는 캐시 안 함 정책으로 회귀 영향 최소화.
     cache_key_args = dict(
         query=search_query,
         doc_type_filter=doc_type_filter,
         use_mcp=use_mcp,
         use_web=use_web,
         claude_model=get_model(kind=hints.kind),
-        prior_turns=prior_turns,
     )
     cached = answer_cache.get(**cache_key_args)
     if cached is not None:
