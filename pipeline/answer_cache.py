@@ -75,10 +75,12 @@ def _cache_key(
     use_mcp: bool,
     use_web: bool,
     claude_model: str,
-    prior_turns: Optional[list] = None,  # 호환용 — 무시. caller 시그니처 안정 위해 보존.
+    kind: str = "",
+    doc_hint: str = "",
+    prior_turns: Optional[list] = None,  # 호환용 — 무시.
 ) -> tuple[str, str]:
-    """질의 + 옵션 조합의 캐시 키. prior_turns 는 키에서 제외 — 멀티턴이라도
-    동일 의도(rewritten_query) 면 적중. analyzer 가 self-contain 화를 책임진다.
+    """캐시 키. analyzer 변동(rewritten_query 미세 변화) 에 강하도록
+    *사용자 원문* + *의도 구조* (kind + doc_hint) 를 사용.
 
     Returns:
         (sha_hex, key_repr) — 파일명용 해시 + 디버그용 원본 표현
@@ -89,6 +91,8 @@ def _cache_key(
         f"mcp={int(bool(use_mcp))}",
         f"web={int(bool(use_web))}",
         f"model={claude_model or ''}",
+        f"kind={kind or ''}",
+        f"doc={(doc_hint or '').strip()}",
     ]
     repr_str = "|".join(parts)
     sha = hashlib.sha256(repr_str.encode("utf-8")).hexdigest()
@@ -102,6 +106,8 @@ def get(
     use_mcp: bool,
     use_web: bool,
     claude_model: str,
+    kind: str = "",
+    doc_hint: str = "",
     prior_turns: Optional[list] = None,
 ) -> Optional[CacheEntry]:
     """캐시 조회. 미스 시 None.
@@ -118,6 +124,8 @@ def get(
         use_mcp=use_mcp,
         use_web=use_web,
         claude_model=claude_model,
+        kind=kind,
+        doc_hint=doc_hint,
         prior_turns=prior_turns,
     )
     path = _CACHE_DIR / f"{sha}.json"
@@ -144,6 +152,8 @@ def put(
     use_web: bool,
     claude_model: str,
     entry: CacheEntry,
+    kind: str = "",
+    doc_hint: str = "",
     prior_turns: Optional[list] = None,
 ) -> None:
     """캐시 저장. 실패는 조용히 (캐시는 best-effort)."""
@@ -157,6 +167,8 @@ def put(
         use_mcp=use_mcp,
         use_web=use_web,
         claude_model=claude_model,
+        kind=kind,
+        doc_hint=doc_hint,
         prior_turns=prior_turns,
     )
     path = _CACHE_DIR / f"{sha}.json"

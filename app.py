@@ -279,18 +279,18 @@ def run_pipeline(
             file=sys.stderr,
         )
 
-    # 답변 캐시 — query_analyzer 의 rewritten_query 가 멀티턴 컨텍스트를
-    # 흡수해 self-contained 화 한다는 점에 의존: prior_turns 자체는 캐시 키에서
-    # 제외하고 *의도가 같으면* 항상 hit 으로 풀어준다. 같은 채팅 안에서 3턴
-    # 후 같은 질문 반복도 적중. 부작용: analyzer 가 self-contain 못 한
-    # 케이스에서 직전 컨텍스트와 무관한 캐시가 노출될 위험은 작게 있지만,
-    # 판단불가는 캐시 안 함 정책으로 회귀 영향 최소화.
+    # 답변 캐시 — analyzer 의 rewritten_query 는 멀티턴 컨텍스트마다 미세
+    # 변동(예: "전문" 부착 여부)이 있어 키로 부적합. 대신 *사용자 원문*
+    # + *의도 구조* (kind, doc_name_hint) 를 키로 사용 — 같은 질문 같은
+    # 의도면 어떤 시점이든 hit. 판단불가 미저장 정책으로 회귀 영향 최소화.
     cache_key_args = dict(
-        query=search_query,
+        query=question.strip(),
         doc_type_filter=doc_type_filter,
         use_mcp=use_mcp,
         use_web=use_web,
         claude_model=get_model(kind=hints.kind),
+        kind=hints.kind or "",
+        doc_hint=(hints.doc_name_hint or "").strip(),
     )
     cached = answer_cache.get(**cache_key_args)
     if cached is not None:
