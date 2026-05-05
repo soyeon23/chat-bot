@@ -11,6 +11,7 @@ Qdrant 검색 — 두 진입점:
 from __future__ import annotations
 
 import os
+import unicodedata
 from itertools import combinations
 from typing import Dict, List, Optional
 
@@ -30,6 +31,7 @@ _COLLECTION = os.getenv("QDRANT_COLLECTION", "rnd_law_chunks")
 _BOOST_STRUCTURAL = 0.50   # article_no/별표 정확 매칭 (질의에 명시적 조문번호)
 _BOOST_PHRASE_PAIR = 0.35  # 키워드 2-gram 페이로드 매칭 (희소·고신호)
 _BOOST_COMPARISON  = 0.30  # 종전 vs 혁신법 비교표 청크 (질의가 변경/차이 묻는 경우)
+_BOOST_COMPARISON_FANOUT = 0.20  # 비교 의도 시 카테고리별 top-1 fan-out 부스트
 _BOOST_KEYWORD_AND = 0.25  # 모든 키워드 AND 매칭 (도메인 키워드 ≥2개)
 _BOOST_PER_KEYWORD = 0.05  # 단일 키워드 매칭(추가 시그널)
 
@@ -387,6 +389,37 @@ def search_chunks_smart(
         except Exception:
             pass
 
+        # 5-b) 비교 fan-out — 카테고리별 top-1 보장.
+        # "시행령 vs 시행규칙" 처럼 두 본체를 비교하는 경우 vector top-K 안에
+        # 한쪽만 들어와 평가셋 4.2 가 fail. doc_name substring 으로 카테고리
+        # 분류 후 각 카테고리 1순위를 pool 에 강제 합류시켜 답변 모델이 양쪽
+        # 본문을 동시에 보게 한다. macOS APFS 가 NFD 로 저장하므로 NFC 정규화
+        # 후 비교해야 'in' 검사가 정확하다.
+        _COMPARISON_DOC_TOKENS = ("법률", "시행령", "시행규칙", "매뉴얼")
+        try:
+            extra = _vector_with_filter(
+                client, query_vector, base_filter, limit=200,
+            )
+            seen: dict[str, bool] = {}
+            for pid, sc, pl in extra:
+                doc_name = unicodedata.normalize(
+                    "NFC", (pl or {}).get("doc_name", "") or "",
+                )
+                for tok in _COMPARISON_DOC_TOKENS:
+                    if tok in doc_name and not seen.get(tok):
+                        _add(
+                            pid,
+                            float(sc) + _BOOST_COMPARISON_FANOUT,
+                            pl,
+                            f"compare:fanout:{tok}",
+                        )
+                        seen[tok] = True
+                        break
+                if len(seen) >= len(_COMPARISON_DOC_TOKENS):
+                    break
+        except Exception:
+            pass
+
     # 6) 단일 키워드 보강 (희소 키워드만) — phrase pair가 모두 0건일 때 백업
     if hints.keywords and not pairs:
         for kw in hints.keywords:
@@ -412,13 +445,49 @@ def search_chunks_smart(
 
     # 정렬 & top_k
     ranked = sorted(pool.items(), key=lambda kv: -kv[1]["score"])
+    selected = list(ranked[:top_k])
+
+    # 비교 의도일 때 — top_k 안에 *카테고리별 top-1* 강제 포함.
+    # 매뉴얼 점수가 본체보다 압도적이면 fan-out boost 만으론 진입 못 한다.
+    # 빠진 카테고리만 ranked 뒷부분에서 찾아 슬롯 마지막에 swap-in.
+    if hints.comparison_intent and len(selected) >= 2:
+        _COMPARISON_DOC_TOKENS = ("법률", "시행령", "시행규칙", "매뉴얼")
+
+        def _category_of(pl: dict) -> str:
+            # macOS APFS NFD 저장 → NFC 정규화 후 비교 (substring 매칭 보장).
+            doc = unicodedata.normalize(
+                "NFC", (pl or {}).get("doc_name", "") or "",
+            )
+            for tok in _COMPARISON_DOC_TOKENS:
+                if tok in doc:
+                    return tok
+            return ""
+
+        seen_cats = {
+            _category_of(e["payload"]) for _, e in selected if _category_of(e["payload"])
+        }
+        missing_cats = [t for t in _COMPARISON_DOC_TOKENS if t not in seen_cats]
+
+        if missing_cats:
+            # ranked[top_k:] 에서 빠진 카테고리의 첫 hit 로 마지막 슬롯 교체.
+            # 매뉴얼 등 이미 충분히 들어온 카테고리는 보존.
+            tail_idx = len(selected) - 1  # 뒤에서부터 swap
+            for cat in missing_cats:
+                if tail_idx < 0:
+                    break
+                for pid, e in ranked[top_k:]:
+                    if _category_of(e["payload"]) == cat:
+                        # tail 자리에 강제 삽입
+                        selected[tail_idx] = (pid, e)
+                        tail_idx -= 1
+                        break
 
     if debug:
         import sys
         print(f"[smart_search] hints={hints.to_dict()}", file=sys.stderr)
         print(f"[smart_search] phrase_pairs={pairs}", file=sys.stderr)
         print(f"[smart_search] pool_size={len(pool)}", file=sys.stderr)
-        for i, (pid, e) in enumerate(ranked[:top_k]):
+        for i, (pid, e) in enumerate(selected):
             pl = e["payload"]
             print(
                 f"  #{i+1} score={e['score']:.4f} "
@@ -428,7 +497,7 @@ def search_chunks_smart(
             )
 
     out: List[dict] = []
-    for pid, entry in ranked[:top_k]:
+    for pid, entry in selected:
         out.append(_payload_to_result(pid, entry["score"], entry["payload"]))
     return out
 
