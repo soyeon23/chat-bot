@@ -30,6 +30,12 @@ from typing import AsyncIterator
 # pdf_parser.py 의 데이터 클래스를 그대로 재사용 — 다운스트림이 동일하게 처리.
 from pipeline.pdf_parser import ParsedPage, ParseResult
 
+# hangul_mcp 0.1.x 의 OLE2 파서가 Python 기본 recursion 한계 1000 을 쉽게 초과.
+# 이 모듈이 import 되는 시점에 process 전역으로 늘려 둔다 — _run_async worker
+# thread 외에 streamlit 답변 처리 thread / claude-agent-sdk MCP 서버 thread 등
+# 어떤 호출 경로에도 영향. recursion limit 은 sys 모듈 레벨에서 process-wide.
+sys.setrecursionlimit(max(sys.getrecursionlimit(), 20000))
+
 _HWPML_PREFIX = b"<?xml"  # 법제처 포털 .hwp 가 종종 이 형태(HWPML)로 배포됨
 
 

@@ -13,6 +13,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# hangul_mcp(OLE2 HWP 파서) + claude-agent-sdk partial message 처리 등 일부
+# 코드 경로가 Python 기본 recursion 한계 1000 을 초과한다. 모든 thread 에 영향
+# 미치도록 streamlit 부팅 가장 이른 시점에 process 전역 한계를 끌어올린다.
+sys.setrecursionlimit(max(sys.getrecursionlimit(), 20000))
+
 st.set_page_config(
     page_title="연구행정 AI",
     page_icon="🔬",
