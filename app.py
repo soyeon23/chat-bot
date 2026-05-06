@@ -20,7 +20,6 @@ sys.setrecursionlimit(max(sys.getrecursionlimit(), 20000))
 
 st.set_page_config(
     page_title="연구행정 AI",
-    page_icon="🔬",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -517,8 +516,8 @@ if "pending_question" not in st.session_state:
 with st.sidebar:
     st.markdown("""
     <div style="padding:16px 0 8px 0;">
-        <div style="font-size:20px;font-weight:700;color:#e2e8f0;">연구행정 AI</div>
-        <div style="font-size:11px;color:#94a3b8;margin-top:4px;">보수형 RAG 챗봇 v0.8</div>
+        <div style="font-size:20px;font-weight:700;color:#e0e0e0;">연구행정 AI</div>
+        <div style="font-size:11px;color:#999999;margin-top:4px;">보수형 RAG 챗봇 v0.8</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -563,7 +562,7 @@ with st.sidebar:
 
     # 검색 필터
     st.markdown(
-        '<div style="color:#94a3b8;font-size:11px;font-weight:600;'
+        '<div style="color:#999999;font-size:11px;font-weight:600;'
         'text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;">'
         '검색 필터</div>',
         unsafe_allow_html=True,
@@ -587,7 +586,7 @@ with st.sidebar:
 
     # PDF 업로드
     st.markdown(
-        '<div style="color:#94a3b8;font-size:11px;font-weight:600;'
+        '<div style="color:#999999;font-size:11px;font-weight:600;'
         'text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;">'
         'PDF 업로드</div>',
         unsafe_allow_html=True,
@@ -600,7 +599,7 @@ with st.sidebar:
     )
     if uploaded_files:
         for uf in uploaded_files:
-            with st.expander(f"📄 {uf.name}"):
+            with st.expander(uf.name):
                 u_type = st.selectbox(
                     "문서 유형",
                     ["법률", "시행령", "시행규칙", "운영요령", "공고문", "FAQ", "가이드"],
@@ -621,7 +620,7 @@ with st.sidebar:
         from pipeline.indexer import get_collection_count
         cnt = get_collection_count()
         st.markdown(
-            f'<div style="color:#94a3b8;font-size:12px;">인덱스: {cnt:,}개 청크</div>',
+            f'<div style="color:#999999;font-size:12px;">인덱스: {cnt:,}개 청크</div>',
             unsafe_allow_html=True,
         )
     except Exception:
@@ -632,14 +631,14 @@ with st.sidebar:
         from pipeline.auth import auth_status_label, get_auth_source
         get_auth_source()
         st.markdown(
-            f'<div style="color:#22c55e;font-size:12px;margin-top:4px;">'
+            f'<div style="color:#999999;font-size:12px;margin-top:4px;">'
             f'인증: {auth_status_label()}</div>',
             unsafe_allow_html=True,
         )
     except RuntimeError:
         st.markdown(
-            '<div style="color:#ef4444;font-size:12px;margin-top:4px;">'
-            '인증 미설정 — `claude` CLI 로그인 필요</div>',
+            '<div style="color:#e60023;font-size:12px;margin-top:4px;">'
+            '인증 미설정 — claude CLI 로그인 필요</div>',
             unsafe_allow_html=True,
         )
 
@@ -778,13 +777,13 @@ if question:
             t = ev.get("type")
             if t == "stage":
                 rendered_lines.append(
-                    f'<div style="color:#94a3b8;font-size:13px;">'
+                    f'<div style="color:#767676;font-size:13px;">'
                     f'{ev.get("name", "")}…</div>'
                 )
             elif t == "tool_use":
                 label = _format_tool_label(ev.get("name", ""), ev.get("input") or {})
                 rendered_lines.append(
-                    f'<div style="color:#6b7280;font-size:13px;margin-left:14px;">'
+                    f'<div style="color:#767676;font-size:13px;margin-left:14px;">'
                     f'  • {label}…</div>'
                 )
                 pending_tool = ev
@@ -793,7 +792,7 @@ if question:
                 if rendered_lines and pending_tool is not None:
                     last = rendered_lines[-1]
                     mark = "⚠" if ev.get("is_error") else "✓"
-                    color = "#ef4444" if ev.get("is_error") else "#22c55e"
+                    color = "#e60023" if ev.get("is_error") else "#22c55e"
                     last = last.replace(
                         "…</div>",
                         f' <span style="color:{color};">{mark}</span></div>',
@@ -819,21 +818,21 @@ if question:
                 if preview.strip():
                     safe = _html_mod.escape(preview[-400:])
                     rendered_lines.append(
-                        f'<div style="color:#374151;font-size:13px;line-height:1.55;'
-                        f'margin:8px 0 0;background:#f3f4f6;padding:10px 12px;'
-                        f'border-radius:6px;border-left:3px solid #2563eb;'
+                        f'<div style="color:#1a1a1a;font-size:13px;line-height:1.55;'
+                        f'margin:8px 0 0;background:#f5f5f5;padding:10px 12px;'
+                        f'border-radius:6px;border-left:3px solid #e60023;'
                         f'white-space:pre-wrap;">'
                         f'{safe}</div>'
                     )
             else:
                 rendered_lines.append(
-                    f'<div style="color:#6b7280;font-size:12px;margin:6px 0;">'
+                    f'<div style="color:#767676;font-size:12px;margin:6px 0;">'
                     f'답변 작성 중… ({len(full):,}자 수신)</div>'
                 )
 
         if not rendered_lines:
             rendered_lines.append(
-                '<div style="color:#6b7280;font-size:13px;">'
+                '<div style="color:#767676;font-size:13px;">'
                 '근거 검색 및 답변 생성 중…</div>'
             )
         return "<div>" + "".join(rendered_lines) + "</div>"

@@ -11,12 +11,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-st.set_page_config(page_title="이용 통계", page_icon="📊", layout="wide")
+st.set_page_config(page_title="이용 통계", layout="wide")
 
 from ui.styles import GLOBAL_CSS
 st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 
-st.markdown("## 📊 이용 통계")
+st.markdown("## 이용 통계")
 st.divider()
 
 _AUDIT_LOG = Path("data/audit_log.jsonl")

@@ -10,10 +10,10 @@ QUICK_PROMPTS = [
 ]
 
 _VERDICT_MAP = {
-    "가능":       ("✅ 가능",        "#22c55e"),
-    "불가":       ("❌ 불가",        "#ef4444"),
-    "조건부 가능": ("⚠️ 조건부 가능", "#f59e0b"),
-    "판단불가":   ("— 판단불가",     "#6b7280"),
+    "가능":       ("가능",        "#22c55e"),
+    "불가":       ("불가",        "#e60023"),
+    "조건부 가능": ("조건부 가능", "#f59e0b"),
+    "판단불가":   ("판단불가",     "#767676"),
 }
 
 # 부스트 신호 → 사용자 표시 라벨
@@ -55,8 +55,8 @@ def _render_confidence_header(
         sig = signals[0]
         sig_label = _SIGNAL_LABELS.get(sig, sig)
         signal_html = (
-            f'<span class="badge" style="background:#e5e7eb;color:#6b7280;'
-            f'font-size:11px;margin-left:6px;">{sig_label}</span>'
+            f'<span class="badge" style="background:#f5f5f5;color:#767676;'
+            f'border:1px solid #efefef;font-size:11px;margin-left:6px;">{sig_label}</span>'
         )
 
     st.markdown(
@@ -125,7 +125,7 @@ def render_answer_card(
     # ── 근거 출처 ──
     if citations:
         st.markdown(" ")
-        st.markdown("**출처**")
+        st.markdown('<p style="font-size:12px;color:#767676;margin:12px 0 6px;font-weight:500;">출처</p>', unsafe_allow_html=True)
         cols = st.columns(min(len(citations), 4))
         for col, cit in zip(cols, citations):
             with col:
@@ -135,20 +135,20 @@ def render_answer_card(
                 if is_official_api:
                     st.markdown(
                         f'<div class="web-badge"><b>{doc}</b><br>'
-                        f'<span style="color:#059669;font-size:11px;">{art}</span></div>',
+                        f'<span style="color:#e60023;font-size:11px;">{art}</span></div>',
                         unsafe_allow_html=True,
                     )
                 else:
                     st.markdown(
                         f'<div class="source-badge"><b>{doc}</b><br>'
-                        f'<span style="color:#2563eb;font-size:11px;">{art}</span></div>',
+                        f'<span style="color:#767676;font-size:11px;">{art}</span></div>',
                         unsafe_allow_html=True,
                     )
 
     # ── 주의사항 ──
     if risk_notes:
         st.markdown(" ")
-        st.markdown("**주의사항**")
+        st.markdown('<p style="font-size:12px;color:#767676;margin:12px 0 6px;font-weight:500;">주의사항</p>', unsafe_allow_html=True)
         for note in risk_notes:
             st.markdown(f'<div class="risk-item">{note}</div>', unsafe_allow_html=True)
 

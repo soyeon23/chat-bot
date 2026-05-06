@@ -1,164 +1,173 @@
 GLOBAL_CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap');
 
 html, body, [class*="css"] {
     font-family: 'Noto Sans KR', sans-serif !important;
+    background-color: #fafafa !important;
 }
 
-/* ── 사이드바 ── */
+/* 사이드바 */
 [data-testid="stSidebar"] {
-    background-color: #1e293b !important;
+    background-color: #111111 !important;
+    border-right: none !important;
 }
-[data-testid="stSidebar"] label,
-[data-testid="stSidebar"] p,
-[data-testid="stSidebar"] div[data-testid="stWidgetLabel"] p,
-[data-testid="stSidebar"] .stMarkdown p,
-[data-testid="stSidebar"] .stMarkdown div,
-[data-testid="stSidebar"] span {
-    color: #e2e8f0 !important;
+[data-testid="stSidebar"] * {
+    color: #e0e0e0 !important;
 }
 [data-testid="stSidebar"] .stButton > button {
-    background-color: #2563eb;
-    color: white !important;
-    border: none;
-    border-radius: 6px;
-    font-weight: 600;
+    background-color: #1a1a1a;
+    color: #e0e0e0 !important;
+    border: 1px solid #333333;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 400;
     width: 100%;
-    transition: background 0.2s;
+    padding: 8px 14px;
+    transition: all 0.15s;
 }
 [data-testid="stSidebar"] .stButton > button:hover {
-    background-color: #1d4ed8;
-}
-[data-testid="stSidebar"] .stSelectbox > div > div {
-    background-color: #334155;
-    color: #e2e8f0;
-    border-color: #475569;
+    background-color: #e60023;
+    border-color: #e60023;
+    color: #ffffff !important;
 }
 
-/* ── 앱 헤더 ── */
-.app-header {
-    font-size: 22px;
-    font-weight: 700;
-    color: #111827;
-    margin-bottom: 2px;
+/* 메인 버튼 */
+.stButton > button {
+    border-radius: 24px !important;
+    font-weight: 500 !important;
+    font-size: 14px !important;
+    border: 1px solid #efefef !important;
+    background: #ffffff !important;
+    color: #1a1a1a !important;
+    padding: 8px 20px !important;
+    transition: all 0.15s !important;
 }
-.app-subheader {
-    font-size: 13px;
-    color: #6b7280;
-    margin-bottom: 16px;
+.stButton > button:hover {
+    border-color: #e60023 !important;
+    color: #e60023 !important;
+    background: #fff5f5 !important;
+}
+button[kind="primary"] {
+    background: #e60023 !important;
+    color: #ffffff !important;
+    border-color: #e60023 !important;
+}
+button[kind="primary"]:hover {
+    background: #c0001e !important;
+    border-color: #c0001e !important;
+    color: #ffffff !important;
 }
 
-/* ── 답변 카드 ── */
+/* 답변 카드 */
 .answer-card {
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
-    border-radius: 10px;
+    background: #ffffff;
+    border: 1px solid #efefef;
+    border-radius: 16px;
     padding: 16px 20px;
-    margin: 4px 0 10px 0;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    margin: 0 0 12px 0;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
 }
 
-/* ── verdict 배지 ── */
+/* verdict 배지 */
 .badge {
     display: inline-block;
-    padding: 3px 10px;
-    border-radius: 4px;
+    padding: 4px 12px;
+    border-radius: 20px;
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     color: white;
     letter-spacing: 0.02em;
-    vertical-align: middle;
 }
 .conf-score {
     font-size: 12px;
-    color: #6b7280;
-    margin-left: 8px;
-    vertical-align: middle;
+    color: #767676;
+    margin-left: 10px;
 }
 
-/* ── 출처 배지 ── */
+/* 출처 배지 */
 .source-badge {
     display: inline-block;
-    background: transparent;
-    border: 1px solid #d1d5db;
-    color: #2563eb;
-    border-radius: 6px;
-    padding: 5px 10px;
+    background: #ffffff;
+    border: 1px solid #efefef;
+    color: #1a1a1a;
+    border-radius: 12px;
+    padding: 6px 12px;
     font-size: 12px;
     margin: 3px;
-    line-height: 1.6;
+    line-height: 1.5;
 }
-
-/* ── 웹 검색 출처 배지 ── */
 .web-badge {
     display: inline-block;
-    background: transparent;
-    border: 1px solid #d1d5db;
-    color: #059669;
-    border-radius: 6px;
-    padding: 5px 10px;
+    background: #fff5f5;
+    border: 1px solid #ffd0d7;
+    color: #e60023;
+    border-radius: 12px;
+    padding: 6px 12px;
     font-size: 12px;
     margin: 3px;
-    line-height: 1.6;
+    line-height: 1.5;
 }
 
-/* ── Critical Caution ── */
+/* 주의/경고 */
 .caution-block {
-    border-left: 3px solid #ef4444;
-    background: #fef2f2;
+    border-left: 3px solid #e60023;
+    background: #fff5f5;
     padding: 10px 14px;
-    border-radius: 0 6px 6px 0;
+    border-radius: 0 8px 8px 0;
     margin: 10px 0;
-    color: #991b1b;
+    color: #c0001e;
     font-size: 13px;
     line-height: 1.7;
 }
-
-/* ── 주의사항 ── */
 .risk-item {
-    background: #fff7ed;
-    border-left: 3px solid #f97316;
-    padding: 6px 10px;
-    border-radius: 0 4px 4px 0;
-    margin: 3px 0;
+    background: #fafafa;
+    border-left: 2px solid #767676;
+    padding: 7px 12px;
+    border-radius: 0 6px 6px 0;
+    margin: 4px 0;
     font-size: 13px;
-    color: #7c2d12;
+    color: #1a1a1a;
     line-height: 1.6;
 }
 
-/* ── 원문 텍스트 ── */
+/* 원문 박스 */
 .original-text-box {
-    background: #f3f4f6;
-    color: #374151;
-    padding: 12px 16px;
-    border-radius: 6px;
-    font-family: 'Noto Sans KR', 'D2Coding', monospace;
+    background: #f5f5f5;
+    color: #1a1a1a;
+    padding: 14px 16px;
+    border-radius: 12px;
+    font-family: 'Noto Sans KR', monospace;
     font-size: 13px;
-    line-height: 1.7;
+    line-height: 1.8;
     margin: 8px 0;
     white-space: pre-wrap;
-    border: 1px solid #e5e7eb;
+    border: 1px solid #efefef;
 }
 
-/* ── Quick Prompt 칩 ── */
-div[data-testid="stHorizontalBlock"] .stButton > button.quick-btn,
-div.quick-btn-wrap button {
-    background: #eff6ff;
-    border: 1px solid #bfdbfe;
-    color: #2563eb;
-    border-radius: 20px;
-    font-size: 13px;
-    padding: 4px 14px;
-    transition: all 0.2s;
+/* 퀵 프롬프트 */
+div.quick-btn-wrap button,
+div[data-testid="stHorizontalBlock"] .stButton > button.quick-btn {
+    background: #ffffff !important;
+    border: 1px solid #efefef !important;
+    color: #1a1a1a !important;
+    border-radius: 20px !important;
+    font-size: 13px !important;
+    padding: 6px 16px !important;
+    transition: all 0.15s !important;
 }
-div[data-testid="stHorizontalBlock"] .stButton > button.quick-btn:hover,
-div.quick-btn-wrap button:hover {
-    background: #2563eb;
-    color: white;
+div.quick-btn-wrap button:hover,
+div[data-testid="stHorizontalBlock"] .stButton > button.quick-btn:hover {
+    border-color: #e60023 !important;
+    color: #e60023 !important;
+    background: #fff5f5 !important;
 }
 
-/* ── 구분선 ── */
-hr { border-color: #e5e7eb !important; }
+/* 구분선 */
+hr { border-color: #efefef !important; }
+
+/* 앱 헤더 */
+.app-header { font-size: 22px; font-weight: 700; color: #1a1a1a; margin-bottom: 2px; }
+.app-subheader { font-size: 13px; color: #767676; margin-bottom: 16px; }
 </style>
 """

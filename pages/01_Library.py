@@ -9,12 +9,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-st.set_page_config(page_title="문서 라이브러리", page_icon="📚", layout="wide")
+st.set_page_config(page_title="문서 라이브러리", layout="wide")
 
 from ui.styles import GLOBAL_CSS
 st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 
-st.markdown("## 📚 문서 라이브러리")
+st.markdown("## 문서 라이브러리")
 st.markdown("인덱싱된 문서 목록입니다. `data/metadata/` 폴더의 CSV를 기반으로 표시합니다.")
 st.divider()
 
@@ -59,7 +59,7 @@ summary = (
 # ── 필터 ──
 col1, col2 = st.columns([2, 1])
 with col1:
-    search = st.text_input("🔍 문서명 검색", placeholder="검색어를 입력하세요...")
+    search = st.text_input("문서명 검색", placeholder="검색어를 입력하세요...")
 with col2:
     type_filter = st.multiselect(
         "문서 유형 필터",

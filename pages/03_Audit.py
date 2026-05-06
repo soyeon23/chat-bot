@@ -11,12 +11,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-st.set_page_config(page_title="감사 로그", page_icon="📋", layout="wide")
+st.set_page_config(page_title="감사 로그", layout="wide")
 
 from ui.styles import GLOBAL_CSS
 st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 
-st.markdown("## 📋 감사 로그")
+st.markdown("## 감사 로그")
 st.markdown("모든 질의 이력을 시간 역순으로 표시합니다.")
 st.divider()
 
@@ -61,7 +61,7 @@ if "시각" in df.columns:
 # ── 필터 ──
 col1, col2 = st.columns([3, 1])
 with col1:
-    search = st.text_input("🔍 질문 검색", placeholder="검색어...")
+    search = st.text_input("질문 검색", placeholder="검색어...")
 with col2:
     if "판단" in df.columns:
         verdict_filter = st.multiselect("판단 결과 필터", df["판단"].unique().tolist(), default=[])
@@ -104,7 +104,7 @@ st.divider()
 # ── CSV 내보내기 ──
 csv_bytes = filtered.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
 st.download_button(
-    label="📥 CSV 내보내기",
+    label="CSV 내보내기",
     data=csv_bytes,
     file_name="audit_log.csv",
     mime="text/csv",
