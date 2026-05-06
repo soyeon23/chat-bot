@@ -132,7 +132,7 @@ html, body, [class*="css"] {
     color: #e2e8f0;
     padding: 14px 16px;
     border-radius: 8px;
-    font-family: 'Courier New', monospace;
+    font-family: 'Noto Sans KR', 'D2Coding', monospace;
     font-size: 13px;
     line-height: 1.7;
     margin: 8px 0;
@@ -140,7 +140,8 @@ html, body, [class*="css"] {
 }
 
 /* ── Quick Prompt 칩 ── */
-div[data-testid="stHorizontalBlock"] .stButton > button.quick-btn {
+div[data-testid="stHorizontalBlock"] .stButton > button.quick-btn,
+div.quick-btn-wrap button {
     background: #eff6ff;
     border: 1px solid #bfdbfe;
     color: #1d4ed8;
@@ -149,7 +150,8 @@ div[data-testid="stHorizontalBlock"] .stButton > button.quick-btn {
     padding: 4px 14px;
     transition: all 0.2s;
 }
-div[data-testid="stHorizontalBlock"] .stButton > button.quick-btn:hover {
+div[data-testid="stHorizontalBlock"] .stButton > button.quick-btn:hover,
+div.quick-btn-wrap button:hover {
     background: #2563eb;
     color: white;
 }

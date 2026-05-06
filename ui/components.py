@@ -103,6 +103,9 @@ def render_answer_card(
     _render_confidence_header(label, color, confidence, signals,
                               confidence_is_na=confidence_is_na)
 
+    # ── 요약 ──
+    st.markdown(f"**{summary}**")
+
     # ── 컨텍스트 사용량 캡션 ──
     if ctx_stats and ctx_stats.get("n_chunks", 0) > 0:
         n_chunks = ctx_stats["n_chunks"]
@@ -117,9 +120,6 @@ def render_answer_card(
             f"~{n_tokens // 1000}K 토큰 "
             f"({model_label}: {limit_k}K 한도의 {pct}%)"
         )
-
-    # ── 요약 ──
-    st.markdown(f"**{summary}**")
 
     # ── 근거 출처 ──
     if citations:
@@ -182,6 +182,10 @@ def render_quick_prompts() -> str | None:
     """Quick Prompt 칩을 렌더링하고 클릭된 텍스트를 반환한다."""
     cols = st.columns(len(QUICK_PROMPTS))
     for col, prompt in zip(cols, QUICK_PROMPTS):
-        if col.button(prompt, key=f"qp_{prompt}"):
-            return prompt
+        with col:
+            st.markdown('<div class="quick-btn-wrap">', unsafe_allow_html=True)
+            clicked = st.button(prompt, key=f"qp_{prompt}", use_container_width=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+            if clicked:
+                return prompt
     return None
