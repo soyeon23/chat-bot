@@ -23,7 +23,7 @@ from pipeline.schemas import AnswerPayload
 
 load_dotenv()
 
-_DEFAULT_MODEL = "claude-sonnet-4-6"
+_DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 # 비교형(comparison) 질의는 추론량이 더 큰 Opus 4.6 으로 escalate.
 # scout F1 (.planning/research/scout-f1-model-upgrade.md) 에 따라 Opus 4.7 은 한국 법령
 # RAG 에서 회귀(MRCR 32→76% 등) 가 보고돼 사용하지 않는다.

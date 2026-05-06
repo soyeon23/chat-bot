@@ -535,6 +535,7 @@ with st.sidebar:
     _MODELS = {
         "Haiku 4.5 (가벼움 · 빠름 · rate limit 여유)": "claude-haiku-4-5-20251001",
         "Sonnet 4.5 (균형)": "claude-sonnet-4-5",
+        "Sonnet 4.6 (최신 균형)": "claude-sonnet-4-6",
         "Opus 4.7 (최고 품질 · 한도 빨리 소진)": "claude-opus-4-7",
     }
     _MODEL_LABELS = list(_MODELS.keys())
@@ -542,7 +543,7 @@ with st.sidebar:
     try:
         _current_idx = list(_MODELS.values()).index(_current_model)
     except ValueError:
-        _current_idx = 1  # default to Sonnet
+        _current_idx = 0  # default to Haiku
     sel_label = st.selectbox(
         "Claude 모델",
         _MODEL_LABELS,
@@ -550,7 +551,7 @@ with st.sidebar:
         help="429 자주 뜨면 Haiku로 변경. 변경 즉시 적용 (재시작 불필요).",
     )
     sel_model = _MODELS[sel_label]
-    if sel_model != _current_model:
+    if sel_model != _current_model and _current_model in _MODELS.values():
         _update_cfg(claude_model=sel_model)
         st.rerun()
 

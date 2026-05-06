@@ -304,7 +304,12 @@ def check_index() -> CheckResult:
         n = get_collection_count()
     except Exception as e:
         return CheckResult(
-            "Qdrant 인덱스", "warn", f"점수 확인 실패: {e}", blocking=False,
+            "Qdrant 인덱스", "missing",
+            f"컬렉션 없음 — 인덱싱 필요 ({e})",
+            fix_label="자동 인덱싱 실행",
+            fix_fn=_fix_ingest,
+            fix_hint="python batch_ingest.py",
+            blocking=False,
         )
     if n == 0:
         return CheckResult(
