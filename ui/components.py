@@ -13,7 +13,7 @@ _VERDICT_MAP = {
     "가능":       ("✅ 가능",        "#22c55e"),
     "불가":       ("❌ 불가",        "#ef4444"),
     "조건부 가능": ("⚠️ 조건부 가능", "#f59e0b"),
-    "판단불가":   ("❓ 판단불가",    "#6b7280"),
+    "판단불가":   ("— 판단불가",     "#6b7280"),
 }
 
 # 부스트 신호 → 사용자 표시 라벨
@@ -49,12 +49,13 @@ def _render_confidence_header(
         conf_text = f"Confidence {confidence:.1f}%"
         conf_color = _conf_color(confidence)
 
-    # 신호 라벨 HTML
+    # 신호 라벨 HTML — 첫 번째 신호만 표시 (과다 뱃지 방지)
     signal_html = ""
-    for sig in signals:
+    if signals:
+        sig = signals[0]
         sig_label = _SIGNAL_LABELS.get(sig, sig)
-        signal_html += (
-            f'<span class="badge" style="background:#374151;color:#d1d5db;'
+        signal_html = (
+            f'<span class="badge" style="background:#e5e7eb;color:#6b7280;'
             f'font-size:11px;margin-left:6px;">{sig_label}</span>'
         )
 
@@ -84,7 +85,7 @@ def render_answer_card(
                    {"n_chunks", "n_chars", "n_tokens", "limit_tokens", "signals"}
     """
     verdict = result.get("verdict", "판단불가")
-    label, color = _VERDICT_MAP.get(verdict, ("❓ 판단불가", "#6b7280"))
+    label, color = _VERDICT_MAP.get(verdict, ("— 판단불가", "#6b7280"))
     summary = result.get("summary", "")
     citations: list[dict] = result.get("citations", [])
     risk_notes: list[str] = result.get("risk_notes", [])
@@ -123,9 +124,9 @@ def render_answer_card(
 
     # ── 근거 출처 ──
     if citations:
-        st.markdown("---")
-        st.markdown("**📚 GROUNDS & SOURCES**")
-        cols = st.columns(min(len(citations), 3))
+        st.markdown(" ")
+        st.markdown("**출처**")
+        cols = st.columns(min(len(citations), 4))
         for col, cit in zip(cols, citations):
             with col:
                 doc = cit.get("document_name", "")
@@ -133,21 +134,21 @@ def render_answer_card(
                 is_official_api = art.startswith("소관:")
                 if is_official_api:
                     st.markdown(
-                        f'<div class="web-badge">📋 <b>{doc}</b><br>'
-                        f'<span style="color:#15803d;font-size:11px;">{art}</span></div>',
+                        f'<div class="web-badge"><b>{doc}</b><br>'
+                        f'<span style="color:#059669;font-size:11px;">{art}</span></div>',
                         unsafe_allow_html=True,
                     )
                 else:
                     st.markdown(
-                        f'<div class="source-badge">📄 <b>{doc}</b><br>'
-                        f'<span style="color:#3b82f6;">{art}</span></div>',
+                        f'<div class="source-badge"><b>{doc}</b><br>'
+                        f'<span style="color:#2563eb;font-size:11px;">{art}</span></div>',
                         unsafe_allow_html=True,
                     )
 
     # ── 주의사항 ──
     if risk_notes:
-        st.markdown("---")
-        st.markdown("**⚠️ 주의사항**")
+        st.markdown(" ")
+        st.markdown("**주의사항**")
         for note in risk_notes:
             st.markdown(f'<div class="risk-item">{note}</div>', unsafe_allow_html=True)
 
@@ -156,7 +157,7 @@ def render_answer_card(
         items_html = "".join(f"• {q}<br>" for q in follow_up_questions)
         st.markdown(
             f'<div class="caution-block">'
-            f'<b>❗ CRITICAL CAUTION</b><br>'
+            f'<b>추가 확인 필요</b><br>'
             f'전담기관 또는 담당 PM의 최종 확인이 필요합니다.<br>'
             f'{items_html}'
             f'</div>',
@@ -165,7 +166,7 @@ def render_answer_card(
 
     # ── 원문 보기 토글 ──
     if citations:
-        with st.expander("📖 VIEW ORIGINAL TEXT"):
+        with st.expander("원문 보기"):
             for cit in citations:
                 doc = cit.get("document_name", "")
                 art = cit.get("article_no", "")

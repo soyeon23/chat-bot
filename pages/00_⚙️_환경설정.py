@@ -160,7 +160,7 @@ auto_fixable_now = [
 ]
 if auto_fixable_now and not st.session_state.get("_auto_fix_done"):
     st.session_state["_auto_fix_done"] = True
-    with st.status("⚡ 자동 설치 진행 중...", expanded=True) as _status:
+    with st.status("설치 진행 중...", expanded=True) as _status:
         _all_ok = True
         for _r in auto_fixable_now:
             st.write(f"⏳ {_r.name} 처리 중...")
@@ -225,7 +225,7 @@ for r in checks:
     if r.status != "ok":
         if r.fix_fn is not None:
             if st.button(
-                f"⚡ {r.fix_label or '자동 수정'} — {r.name}",
+                f"{r.fix_label or '자동 수정'} — {r.name}",
                 key=f"fix_{r.name}",
                 use_container_width=True,
             ):
@@ -256,7 +256,7 @@ if auto_fixable:
         unsafe_allow_html=True,
     )
     if st.button(
-        f"⚡ 자동 업데이트 ({len(auto_fixable)}개 한꺼번에)",
+        f"자동 업데이트 ({len(auto_fixable)}개 한꺼번에)",
         use_container_width=True,
         type="primary",
     ):
@@ -272,7 +272,7 @@ if auto_fixable:
         st.rerun()
 
 # ── 프로젝트 경로 ───────────────────────────────────────────
-st.markdown('<div class="section-title">📂 프로젝트 경로</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-title">프로젝트 경로</div>', unsafe_allow_html=True)
 st.markdown(
     '<div class="section-caption">PDF·HWP 파일이 있는 폴더. 저장 시 변경사항이 자동으로 인덱싱됩니다.</div>',
     unsafe_allow_html=True,
@@ -415,7 +415,7 @@ new_pdf = st.session_state.cfg_pdf_dir
 new_hwp = st.session_state.cfg_hwp_dir
 
 # ── 인덱스 동기화 (Phase G4) ────────────────────────────────
-st.markdown('<div class="section-title">📂 인덱스 동기화</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-title">인덱스 동기화</div>', unsafe_allow_html=True)
 st.markdown(
     '<div class="section-caption">'
     '폴더의 PDF·HWP 파일을 스캔해 변경된 파일만 자동 재인덱싱합니다 (Git처럼 동작). '
@@ -574,7 +574,7 @@ if apply_clicked and last_scan:
 
 
 # ── 답변 모델 ───────────────────────────────────────────────
-st.markdown('<div class="section-title">🤖 답변 모델</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-title">답변 모델</div>', unsafe_allow_html=True)
 st.markdown(
     '<div class="section-caption">'
     '연구행정 답변 생성에 사용할 Claude 모델. 기본은 Sonnet 4.6 이고, 여러 문서/조문을 '
@@ -626,7 +626,7 @@ new_escalate = st.checkbox(
 )
 
 # ── 외부 서비스 ─────────────────────────────────────────────
-st.markdown('<div class="section-title">🔌 외부 서비스</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-title">외부 서비스</div>', unsafe_allow_html=True)
 
 new_mcp_url = st.text_input("법제처 MCP URL", value=cfg.korean_law_mcp_url, key="cfg_mcp_url")
 new_oc = st.text_input(
@@ -722,7 +722,7 @@ if changes:
         st.rerun()
 
 # ── MCP 상태 (Phase G5) ─────────────────────────────────────
-st.markdown('<div class="section-title">🔄 MCP 상태</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-title">MCP 상태</div>', unsafe_allow_html=True)
 st.markdown(
     '<div class="section-caption">'
     '연동 MCP 의 스키마/버전 상태와 연속 실패 시 자동 비활성 정보를 보여줍니다. '

@@ -38,52 +38,53 @@ html, body, [class*="css"] {
 
 /* ── 앱 헤더 ── */
 .app-header {
-    font-size: 24px;
+    font-size: 22px;
     font-weight: 700;
-    color: #0f172a;
+    color: #111827;
     margin-bottom: 2px;
 }
 .app-subheader {
     font-size: 13px;
-    color: #64748b;
+    color: #6b7280;
     margin-bottom: 16px;
 }
 
 /* ── 답변 카드 ── */
 .answer-card {
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
-    border-radius: 12px;
-    padding: 20px 24px;
-    margin: 4px 0 12px 0;
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin: 4px 0 10px 0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
 }
 
 /* ── verdict 배지 ── */
 .badge {
     display: inline-block;
-    padding: 5px 14px;
-    border-radius: 20px;
+    padding: 3px 10px;
+    border-radius: 4px;
     font-size: 12px;
-    font-weight: 700;
+    font-weight: 600;
     color: white;
-    letter-spacing: 0.03em;
+    letter-spacing: 0.02em;
     vertical-align: middle;
 }
 .conf-score {
-    font-size: 13px;
-    color: #64748b;
-    margin-left: 10px;
+    font-size: 12px;
+    color: #6b7280;
+    margin-left: 8px;
     vertical-align: middle;
 }
 
 /* ── 출처 배지 ── */
 .source-badge {
     display: inline-block;
-    background: #eff6ff;
-    border: 1px solid #bfdbfe;
-    color: #1d4ed8;
-    border-radius: 8px;
-    padding: 6px 12px;
+    background: transparent;
+    border: 1px solid #d1d5db;
+    color: #2563eb;
+    border-radius: 6px;
+    padding: 5px 10px;
     font-size: 12px;
     margin: 3px;
     line-height: 1.6;
@@ -92,11 +93,11 @@ html, body, [class*="css"] {
 /* ── 웹 검색 출처 배지 ── */
 .web-badge {
     display: inline-block;
-    background: #f0fdf4;
-    border: 1px solid #bbf7d0;
-    color: #15803d;
-    border-radius: 8px;
-    padding: 6px 12px;
+    background: transparent;
+    border: 1px solid #d1d5db;
+    color: #059669;
+    border-radius: 6px;
+    padding: 5px 10px;
     font-size: 12px;
     margin: 3px;
     line-height: 1.6;
@@ -104,23 +105,23 @@ html, body, [class*="css"] {
 
 /* ── Critical Caution ── */
 .caution-block {
-    border-left: 4px solid #ef4444;
+    border-left: 3px solid #ef4444;
     background: #fef2f2;
-    padding: 12px 16px;
-    border-radius: 0 8px 8px 0;
-    margin: 12px 0;
+    padding: 10px 14px;
+    border-radius: 0 6px 6px 0;
+    margin: 10px 0;
     color: #991b1b;
     font-size: 13px;
-    line-height: 1.8;
+    line-height: 1.7;
 }
 
 /* ── 주의사항 ── */
 .risk-item {
     background: #fff7ed;
     border-left: 3px solid #f97316;
-    padding: 8px 12px;
-    border-radius: 0 6px 6px 0;
-    margin: 4px 0;
+    padding: 6px 10px;
+    border-radius: 0 4px 4px 0;
+    margin: 3px 0;
     font-size: 13px;
     color: #7c2d12;
     line-height: 1.6;
@@ -128,15 +129,16 @@ html, body, [class*="css"] {
 
 /* ── 원문 텍스트 ── */
 .original-text-box {
-    background: #0f172a;
-    color: #e2e8f0;
-    padding: 14px 16px;
-    border-radius: 8px;
+    background: #f3f4f6;
+    color: #374151;
+    padding: 12px 16px;
+    border-radius: 6px;
     font-family: 'Noto Sans KR', 'D2Coding', monospace;
     font-size: 13px;
     line-height: 1.7;
     margin: 8px 0;
     white-space: pre-wrap;
+    border: 1px solid #e5e7eb;
 }
 
 /* ── Quick Prompt 칩 ── */
@@ -144,7 +146,7 @@ div[data-testid="stHorizontalBlock"] .stButton > button.quick-btn,
 div.quick-btn-wrap button {
     background: #eff6ff;
     border: 1px solid #bfdbfe;
-    color: #1d4ed8;
+    color: #2563eb;
     border-radius: 20px;
     font-size: 13px;
     padding: 4px 14px;
@@ -157,6 +159,6 @@ div.quick-btn-wrap button:hover {
 }
 
 /* ── 구분선 ── */
-hr { border-color: #334155 !important; }
+hr { border-color: #e5e7eb !important; }
 </style>
 """

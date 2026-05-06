@@ -101,7 +101,7 @@ if _cfg_on_start.auto_sync_on_start and not st.session_state.get("_auto_sync_don
         )
         if n_pending > 0:
             st.sidebar.warning(
-                f"📂 동기화 대기 {n_pending}개 — 환경설정에서 실행하세요."
+                f"동기화 대기 {n_pending}개 — 환경설정에서 실행하세요."
             )
         st.session_state["_auto_sync_done"] = True
     except Exception as e:  # noqa: BLE001
@@ -450,24 +450,24 @@ def _ingest_file(uploaded_file, doc_name: str, doc_type: str) -> None:
     file_path.write_bytes(uploaded_file.getvalue())
 
     with st.status(f"인덱싱 중: {uploaded_file.name}", expanded=True) as status:
-        st.write("📖 PDF 파싱 중...")
+        st.write("PDF 파싱 중...")
         parse_result = parse_pdf(str(file_path), save_raw=False)
 
-        st.write("✂️ 청크 분할 중...")
+        st.write("청크 분할 중...")
         chunks = chunk_document(parse_result, doc_name, doc_type)
         if not chunks:
-            status.update(label="❌ 청크 생성 실패", state="error")
+            status.update(label="청크 생성 실패", state="error")
             return
 
-        st.write(f"🔢 임베딩 생성 중 ({len(chunks)}개 청크)...")
+        st.write(f"임베딩 생성 중 ({len(chunks)}개 청크)...")
         chunk_dicts = [asdict(c) for c in chunks]
         embedded = embed_chunks(chunk_dicts)
 
-        st.write("📤 Qdrant 적재 중...")
+        st.write("Qdrant 적재 중...")
         ensure_collection()
         n = upsert_chunks(chunk_dicts, embedded)
 
-        status.update(label=f"✅ 인덱싱 완료 — {n}개 포인트 적재", state="complete")
+        status.update(label=f"인덱싱 완료 — {n}개 포인트 적재", state="complete")
 
 
 def _save_audit(
@@ -517,17 +517,17 @@ if "pending_question" not in st.session_state:
 with st.sidebar:
     st.markdown("""
     <div style="padding:16px 0 8px 0;">
-        <div style="font-size:20px;font-weight:700;color:#e2e8f0;">🔬 연구행정 AI</div>
+        <div style="font-size:20px;font-weight:700;color:#e2e8f0;">연구행정 AI</div>
         <div style="font-size:11px;color:#94a3b8;margin-top:4px;">보수형 RAG 챗봇 v0.8</div>
     </div>
     """, unsafe_allow_html=True)
 
-    if st.button("🗑️ 새 분석 시작", use_container_width=True):
+    if st.button("새 분석 시작", use_container_width=True):
         st.session_state.messages = []
         st.session_state.pending_question = None
         st.rerun()
 
-    if st.button("⚙️ 환경/경로 설정", use_container_width=True):
+    if st.button("환경/경로 설정", use_container_width=True):
         st.switch_page("pages/00_⚙️_환경설정.py")
 
     st.divider()
@@ -621,7 +621,7 @@ with st.sidebar:
         from pipeline.indexer import get_collection_count
         cnt = get_collection_count()
         st.markdown(
-            f'<div style="color:#94a3b8;font-size:12px;">📊 인덱스: {cnt:,}개 청크</div>',
+            f'<div style="color:#94a3b8;font-size:12px;">인덱스: {cnt:,}개 청크</div>',
             unsafe_allow_html=True,
         )
     except Exception:
@@ -633,13 +633,13 @@ with st.sidebar:
         get_auth_source()
         st.markdown(
             f'<div style="color:#22c55e;font-size:12px;margin-top:4px;">'
-            f'🔐 인증: {auth_status_label()}</div>',
+            f'인증: {auth_status_label()}</div>',
             unsafe_allow_html=True,
         )
     except RuntimeError:
         st.markdown(
             '<div style="color:#ef4444;font-size:12px;margin-top:4px;">'
-            '🔐 인증 미설정 — `claude` CLI 로그인 필요</div>',
+            '인증 미설정 — `claude` CLI 로그인 필요</div>',
             unsafe_allow_html=True,
         )
 
@@ -752,18 +752,18 @@ if question:
         doc = (args.get("doc_name") or "").strip()
         if bare == "read_page":
             page = args.get("page_num") or args.get("page") or "?"
-            return f"📖 {doc or '문서'} p.{page} 읽는 중"
+            return f"{doc or '문서'} p.{page} 읽는 중"
         if bare == "get_article":
             art = args.get("article_no") or "?"
-            return f"📄 {doc or '문서'} {art} 조회"
+            return f"{doc or '문서'} {art} 조회"
         if bare == "search_text":
             q = (args.get("query") or "").strip()
-            return f"🔍 {doc or '문서'}에서 '{q}' 검색"
+            return f"{doc or '문서'}에서 '{q}' 검색"
         if bare == "list_articles":
-            return f"📋 {doc or '문서'} 조문 목록"
+            return f"{doc or '문서'} 조문 목록"
         if bare == "list_documents":
-            return "📂 문서 목록 조회"
-        return f"🛠 {bare}"
+            return "문서 목록 조회"
+        return bare
 
     import html as _html_mod
     import re as _re_mod
@@ -779,12 +779,12 @@ if question:
             if t == "stage":
                 rendered_lines.append(
                     f'<div style="color:#94a3b8;font-size:13px;">'
-                    f'⏳ {ev.get("name", "")}…</div>'
+                    f'{ev.get("name", "")}…</div>'
                 )
             elif t == "tool_use":
                 label = _format_tool_label(ev.get("name", ""), ev.get("input") or {})
                 rendered_lines.append(
-                    f'<div style="color:#cbd5e1;font-size:13px;margin-left:14px;">'
+                    f'<div style="color:#6b7280;font-size:13px;margin-left:14px;">'
                     f'  • {label}…</div>'
                 )
                 pending_tool = ev
@@ -819,22 +819,22 @@ if question:
                 if preview.strip():
                     safe = _html_mod.escape(preview[-400:])
                     rendered_lines.append(
-                        f'<div style="color:#cbd5e1;font-size:13px;line-height:1.55;'
-                        f'margin:8px 0 0;background:#0f172a;padding:10px 12px;'
-                        f'border-radius:6px;border-left:3px solid #38bdf8;'
+                        f'<div style="color:#374151;font-size:13px;line-height:1.55;'
+                        f'margin:8px 0 0;background:#f3f4f6;padding:10px 12px;'
+                        f'border-radius:6px;border-left:3px solid #2563eb;'
                         f'white-space:pre-wrap;">'
-                        f'✍️ {safe}</div>'
+                        f'{safe}</div>'
                     )
             else:
                 rendered_lines.append(
-                    f'<div style="color:#94a3b8;font-size:12px;margin:6px 0;">'
-                    f'✍️ 답변 작성 중… ({len(full):,}자 수신)</div>'
+                    f'<div style="color:#6b7280;font-size:12px;margin:6px 0;">'
+                    f'답변 작성 중… ({len(full):,}자 수신)</div>'
                 )
 
         if not rendered_lines:
             rendered_lines.append(
-                '<div style="color:#94a3b8;font-size:13px;">'
-                '🔍 근거 검색 및 답변 생성 중…</div>'
+                '<div style="color:#6b7280;font-size:13px;">'
+                '근거 검색 및 답변 생성 중…</div>'
             )
         return "<div>" + "".join(rendered_lines) + "</div>"
 
@@ -847,7 +847,7 @@ if question:
         thread.start()
 
         spinner_box.markdown(_render_progress_html([]), unsafe_allow_html=True)
-        if cancel_box.button("⛔ 취소", key=f"cancel_{len(st.session_state.messages)}"):
+        if cancel_box.button("취소", key=f"cancel_{len(st.session_state.messages)}"):
             cancel_event.set()
 
         # 워커 완료 또는 취소까지 폴링 — 매 사이클 진행상황 갱신
@@ -874,7 +874,7 @@ if question:
 
         if "rate_limit" in result_holder:
             st.error(
-                f"⏳ {result_holder['rate_limit']}\n\n"
+                f"{result_holder['rate_limit']}\n\n"
                 "Claude Code 구독 사용량 한도에 도달했습니다. "
                 "잠시 후 다시 시도하거나, 다른 모델을 `.env`의 `CLAUDE_MODEL`로 지정해 보세요."
             )
@@ -893,7 +893,7 @@ if question:
             st.markdown(result.get("summary", ""))
         else:
             if web_used:
-                st.caption("📋 법제처 공식 API(법령·판례·행정규칙) 결과가 보완 근거로 사용되었습니다.")
+                st.caption("법제처 공식 API(법령·판례·행정규칙) 결과가 보완 근거로 사용되었습니다.")
             render_answer_card(result, confidence, ctx_stats=ctx_stats)
         st.session_state.messages.append({
             "role":       "assistant",
@@ -908,6 +908,6 @@ if question:
         )
         # UI 하단에 처리 시간 표시 (사용자 가시성)
         st.caption(
-            f"⏱ {started_at.strftime('%H:%M:%S')} → {ended_at.strftime('%H:%M:%S')} "
+            f"{started_at.strftime('%H:%M:%S')} → {ended_at.strftime('%H:%M:%S')} "
             f"({(ended_at - started_at).total_seconds():.1f}s)"
         )
