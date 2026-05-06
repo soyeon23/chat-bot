@@ -200,8 +200,12 @@ def _compute_confidence(qdrant_chunks: list[dict]) -> tuple[float | None, list[s
         avg = sum(vec_scores) / len(vec_scores)
         # 작은 부스트가 섞여 있을 수 있으므로 최대 95% 로 캡
         confidence_pct: float | None = min(avg * 100, 95.0)
+    elif has_page_boost:
+        confidence_pct = 92.0   # 페이지 직접 매칭 → 고신뢰
+    elif has_structural_boost:
+        confidence_pct = 87.0   # 조문 직접 매칭 → 고신뢰
     else:
-        confidence_pct = None  # 부스트 전용
+        confidence_pct = None  # 청크 없음(예외 경로)
 
     # 신호 라벨 구성
     signals: list[str] = []
