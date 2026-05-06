@@ -154,7 +154,10 @@ sys_info = system_summary()
 
 # ── 자동 설치 (첫 실행 or 수동 트리거) ──────────────────────
 # 세션당 1회만 자동 실행. 실패 항목은 오류 메시지와 함께 수동 버튼으로 재시도 가능.
-auto_fixable_now = [r for r in checks if r.status != "ok" and r.fix_fn is not None]
+auto_fixable_now = [
+    r for r in checks
+    if r.status != "ok" and r.fix_fn is not None and r.name != "Qdrant 인덱스"
+]
 if auto_fixable_now and not st.session_state.get("_auto_fix_done"):
     st.session_state["_auto_fix_done"] = True
     with st.status("⚡ 자동 설치 진행 중...", expanded=True) as _status:

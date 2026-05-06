@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import platform
 import re
 import sys
 from typing import Optional
@@ -440,8 +441,13 @@ def _run_query_sync(
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                # 이미 이벤트루프 안인 경우 (드물지만 streamlit/jupyter 등) — 새 루프
-                new_loop = asyncio.new_event_loop()
+                # 이미 이벤트루프 안인 경우 (드물지만 streamlit/jupyter 등) — 새 루프.
+                # Windows: SelectorEventLoop(비-main 스레드 기본값)은 subprocess를 지원 안 함.
+                # ProactorEventLoop 를 명시적으로 생성해야 anyio.open_process 가 동작.
+                if platform.system() == "Windows":
+                    new_loop = asyncio.ProactorEventLoop()
+                else:
+                    new_loop = asyncio.new_event_loop()
                 try:
                     return new_loop.run_until_complete(
                         _run_query(
@@ -454,6 +460,9 @@ def _run_query_sync(
         except RuntimeError:
             # no current event loop
             pass
+        # Windows 워커 스레드에서도 ProactorEventLoop 를 보장.
+        if platform.system() == "Windows":
+            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
         return asyncio.run(
             _run_query(
                 model, system_prompt, user_prompt,
@@ -482,6 +491,17 @@ def _run_query_sync(
                 file=sys.stderr,
             )
             return json.dumps(_MAX_TURNS_STUB_PAYLOAD, ensure_ascii=False)
+        # CLI 시작 실패 — 사용자에게 친절한 메시지로 변환.
+        try:
+            from claude_agent_sdk._errors import CLIConnectionError as _CLIErr
+            if isinstance(exc, _CLIErr):
+                raise RuntimeError(
+                    "Claude Code CLI를 시작할 수 없습니다. "
+                    "Streamlit을 실행한 터미널에서 'claude --version'이 정상 동작하는지 확인하세요. "
+                    f"(원인: {exc})"
+                ) from exc
+        except ImportError:
+            pass
         raise
 
 
