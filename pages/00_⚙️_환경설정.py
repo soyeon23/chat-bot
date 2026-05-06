@@ -152,6 +152,27 @@ is_first_run = not cfg.onboarding_completed
 checks: list[CheckResult] = run_all_checks(include_optional=True)
 sys_info = system_summary()
 
+# ── 자동 설치 (첫 실행 or 수동 트리거) ──────────────────────
+# 세션당 1회만 자동 실행. 실패 항목은 오류 메시지와 함께 수동 버튼으로 재시도 가능.
+auto_fixable_now = [r for r in checks if r.status != "ok" and r.fix_fn is not None]
+if auto_fixable_now and not st.session_state.get("_auto_fix_done"):
+    st.session_state["_auto_fix_done"] = True
+    with st.status("⚡ 자동 설치 진행 중...", expanded=True) as _status:
+        _all_ok = True
+        for _r in auto_fixable_now:
+            st.write(f"⏳ {_r.name} 처리 중...")
+            _ok, _msg = _r.fix_fn()
+            if _ok:
+                st.write(f"✅ {_r.name}: {_msg}")
+            else:
+                st.write(f"❌ {_r.name}: {_msg}")
+                _all_ok = False
+        _status.update(
+            label="✅ 자동 설치 완료" if _all_ok else "⚠️ 일부 항목 수동 처리 필요",
+            state="complete" if _all_ok else "error",
+        )
+    checks = run_all_checks(include_optional=True)  # 체크 결과 갱신
+
 # 최초 실행 시 사이드바 완전 숨김 — 페이지 네비게이션·열기 토글까지 차단해
 # 사용자가 환경 검사 → "시작하기" 외 다른 페이지로 새지 않게.
 # 온보딩 완료 후엔 환경설정 재방문 시 사이드바 정상 노출.

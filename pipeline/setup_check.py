@@ -39,13 +39,95 @@ def check_python() -> CheckResult:
     )
 
 
-def check_tesseract() -> CheckResult:
+_TESS_DEFAULT_DIRS = [
+    r"C:\Program Files\Tesseract-OCR",
+    r"C:\Program Files (x86)\Tesseract-OCR",
+]
+
+
+def _find_tesseract() -> str | None:
+    """PATH 검색 후 Windows 기본 설치 경로도 확인."""
     binary = shutil.which("tesseract")
+    if binary:
+        return binary
+    if platform.system() == "Windows":
+        for d in _TESS_DEFAULT_DIRS:
+            exe = Path(d) / "tesseract.exe"
+            if exe.exists():
+                os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
+                return str(exe)
+    return None
+
+
+def check_tesseract() -> CheckResult:
+    binary = _find_tesseract()
     if not binary:
+        def _fix_tesseract() -> tuple[bool, str]:
+            import tempfile
+            import urllib.request
+
+            system = platform.system()
+            if system == "Windows":
+                _TESS_URL = (
+                    "https://github.com/UB-Mannheim/tesseract/releases/download/"
+                    "v5.4.0.20240606/tesseract-ocr-w64-setup-5.4.0.20240606.exe"
+                )
+                _TESS_DIRS = [
+                    r"C:\Program Files\Tesseract-OCR",
+                    r"C:\Program Files (x86)\Tesseract-OCR",
+                ]
+
+                def _patch_path() -> None:
+                    for d in _TESS_DIRS:
+                        if Path(d).exists():
+                            os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
+                            break
+
+                # GitHub에서 설치 파일 다운로드 후 UAC 권한 요청하여 자동 설치
+                try:
+                    tmp = Path(tempfile.mktemp(suffix=".exe"))
+                    urllib.request.urlretrieve(_TESS_URL, str(tmp))
+                    # Start-Process -Verb RunAs: UAC 창 한 번 승인하면 관리자 권한으로 silent 설치
+                    ps_cmd = (
+                        f'Start-Process -FilePath "{tmp}" '
+                        f'-ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-" '
+                        f'-Verb RunAs -Wait'
+                    )
+                    r = subprocess.run(
+                        ["powershell", "-NoProfile", "-Command", ps_cmd],
+                        capture_output=True, timeout=300,
+                    )
+                    tmp.unlink(missing_ok=True)
+                    if r.returncode == 0:
+                        _patch_path()
+                        return True, "Tesseract 설치 완료 — 앱을 재시작하세요."
+                    err = (r.stderr or b"").decode("utf-8", errors="replace")[-400:]
+                    return False, f"설치 실패 (code={r.returncode}):\n{err}"
+                except Exception as e:
+                    return False, (
+                        f"다운로드/설치 실패: {e}\n"
+                        "수동 설치: https://github.com/UB-Mannheim/tesseract/wiki"
+                    )
+            else:
+                if shutil.which("brew"):
+                    r = subprocess.run(
+                        ["brew", "install", "tesseract", "tesseract-lang"],
+                        capture_output=True, timeout=600,
+                    )
+                    out = (r.stdout or b"").decode("utf-8", errors="replace")
+                    err = (r.stderr or b"").decode("utf-8", errors="replace")
+                    if r.returncode == 0:
+                        return True, "Tesseract 설치 완료"
+                    return False, f"brew 실패:\n{(err or out)[-400:]}"
+                return False, "brew 없음. 수동 설치가 필요합니다."
+
+        hint = "winget install UB-Mannheim.TesseractOCR" if platform.system() == "Windows" else "brew install tesseract tesseract-lang"
         return CheckResult(
             "tesseract OCR", "missing", "설치되지 않음",
-            fix_label="설치 명령 복사",
-            fix_hint="brew install tesseract tesseract-lang",
+            fix_label="자동 설치",
+            fix_fn=_fix_tesseract,
+            fix_hint=hint,
+            blocking=False,
         )
     try:
         out = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=3)
@@ -190,13 +272,32 @@ def check_auth() -> CheckResult:
 
 def check_index() -> CheckResult:
     qdrant_path = os.getenv("QDRANT_PATH", "./qdrant_storage")
+
+    def _fix_ingest() -> tuple[bool, str]:
+        # subprocess 대신 in-process 호출 — Qdrant 로컬 모드는 단일 프로세스만 허용
+        try:
+            import importlib.util
+            base = Path(__file__).parent.parent
+            spec = importlib.util.spec_from_file_location(
+                "_batch_ingest_runtime", str(base / "batch_ingest.py")
+            )
+            mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+            spec.loader.exec_module(mod)  # type: ignore[union-attr]
+            mod.main()
+            return True, "인덱싱 완료"
+        except SystemExit:
+            return True, "인덱싱 완료"
+        except Exception as e:
+            return False, f"오류: {e}"
+
     if not Path(qdrant_path).exists():
         return CheckResult(
             "Qdrant 인덱스", "missing",
             "qdrant_storage/ 폴더 없음 — 인덱싱 필요",
-            fix_label="batch_ingest.py 실행",
+            fix_label="자동 인덱싱 실행",
+            fix_fn=_fix_ingest,
             fix_hint="python batch_ingest.py",
-            blocking=False,  # 인덱스 비어도 챗봇 자체는 실행 가능 (답변만 안 됨)
+            blocking=False,
         )
     try:
         from pipeline.indexer import get_collection_count
@@ -209,7 +310,8 @@ def check_index() -> CheckResult:
         return CheckResult(
             "Qdrant 인덱스", "warn",
             "컬렉션은 있으나 청크 0개",
-            fix_label="batch_ingest.py 실행",
+            fix_label="자동 인덱싱 실행",
+            fix_fn=_fix_ingest,
             fix_hint="python batch_ingest.py",
             blocking=False,
         )
