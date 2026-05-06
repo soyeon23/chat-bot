@@ -637,7 +637,7 @@ with st.sidebar:
         )
     except RuntimeError:
         st.markdown(
-            '<div style="color:#e60023;font-size:12px;margin-top:4px;">'
+            '<div style="color:#ef4444;font-size:12px;margin-top:4px;">'
             '인증 미설정 — claude CLI 로그인 필요</div>',
             unsafe_allow_html=True,
         )
@@ -792,7 +792,7 @@ if question:
                 if rendered_lines and pending_tool is not None:
                     last = rendered_lines[-1]
                     mark = "⚠" if ev.get("is_error") else "✓"
-                    color = "#e60023" if ev.get("is_error") else "#22c55e"
+                    color = "#ef4444" if ev.get("is_error") else "#22c55e"
                     last = last.replace(
                         "…</div>",
                         f' <span style="color:{color};">{mark}</span></div>',
@@ -820,7 +820,7 @@ if question:
                     rendered_lines.append(
                         f'<div style="color:#1a1a1a;font-size:13px;line-height:1.55;'
                         f'margin:8px 0 0;background:#f5f5f5;padding:10px 12px;'
-                        f'border-radius:6px;border-left:3px solid #e60023;'
+                        f'border-radius:6px;border-left:3px solid #2563eb;'
                         f'white-space:pre-wrap;">'
                         f'{safe}</div>'
                     )

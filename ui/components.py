@@ -10,10 +10,10 @@ QUICK_PROMPTS = [
 ]
 
 _VERDICT_MAP = {
-    "가능":       ("가능",        "#22c55e"),
-    "불가":       ("불가",        "#e60023"),
-    "조건부 가능": ("조건부 가능", "#f59e0b"),
-    "판단불가":   ("판단불가",     "#767676"),
+    "가능":       ("✅ 가능",        "#22c55e"),
+    "불가":       ("❌ 불가",        "#ef4444"),
+    "조건부 가능": ("⚠️ 조건부",     "#f59e0b"),
+    "판단불가":   ("— 판단불가",     "#6b7280"),
 }
 
 # 부스트 신호 → 사용자 표시 라벨
@@ -135,7 +135,7 @@ def render_answer_card(
                 if is_official_api:
                     st.markdown(
                         f'<div class="web-badge"><b>{doc}</b><br>'
-                        f'<span style="color:#e60023;font-size:11px;">{art}</span></div>',
+                        f'<span style="color:#15803d;font-size:11px;">{art}</span></div>',
                         unsafe_allow_html=True,
                     )
                 else:
