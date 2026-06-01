@@ -427,7 +427,10 @@ st.markdown(
 
 def _sync_roots_for_ui() -> list[Path]:
     """현재 설정에서 sync 루트 결정. config_store + 세션 상태."""
-    roots: list[Path] = [Path(".").resolve()]
+    pdf_root = Path(cfg.pdf_dir).expanduser() if cfg.pdf_dir else Path(".").resolve()
+    if not pdf_root.is_absolute():
+        pdf_root = Path(".").resolve() / pdf_root
+    roots: list[Path] = [pdf_root]
     if cfg.hwp_dir:
         extra = Path(cfg.hwp_dir).expanduser()
         if extra.exists() and extra.resolve() != roots[0]:
